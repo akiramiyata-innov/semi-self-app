@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Avatar animations */
+@keyframes breathing {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(1.03); }
+}
+
+@keyframes blink {
+  0%, 90%, 100% { transform: scaleY(1); }
+  95% { transform: scaleY(0.1); }
+}
+
+@keyframes talking {
+  0%, 100% { d: path("M 40 65 Q 50 68 60 65"); }
+  50% { d: path("M 40 65 Q 50 75 60 65"); }
+}
+
+@keyframes entrance {
+  0% { opacity: 0; transform: scale(0.5) translateY(30px); }
+  60% { transform: scale(1.08) translateY(-5px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.8); opacity: 1; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+@keyframes slide-in-right {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.avatar-container {
+  animation: breathing 3s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+
+.avatar-entrance {
+  animation: entrance 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+.avatar-talking .mouth-path {
+  animation: talking 0.18s ease-in-out infinite alternate;
+}
+
+.call-queue-item {
+  animation: slide-in-right 0.3s ease-out;
+}
