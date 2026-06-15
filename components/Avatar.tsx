@@ -168,11 +168,13 @@ export function Avatar({
           <polygon points="50,65 47,80 50,82 53,80" fill="#c0392b" />
           {/* Head */}
           <ellipse cx="50" cy="38" rx="20" ry="22" fill="#f5cba7" />
+          {/* Cap crown — covers top of head */}
+          <rect x="29" y="8" width="42" height="16" rx="5" fill="#1e3a5f" />
           {/* Cap brim */}
           <rect x="28" y="20" width="44" height="6" rx="3" fill="#1e3a5f" />
           <rect x="22" y="23" width="56" height="4" rx="2" fill="#1e3a5f" />
           {/* Cap badge */}
-          <circle cx="50" cy="20" r="3" fill="#f1c40f" />
+          <circle cx="50" cy="14" r="3" fill="#f1c40f" />
           {/* Eyes */}
           <ellipse cx="42" cy="38" rx="3.5" ry="3.5" fill="white" />
           <ellipse cx="58" cy="38" rx="3.5" ry="3.5" fill="white" />

@@ -8,6 +8,7 @@ import { TranscriptPanel } from "@/components/TranscriptPanel";
 import { ScreenShareView } from "@/components/ScreenShareView";
 import { SUPPORTED_LANGS } from "@/lib/languages";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
+import { useScreenCapture } from "@/hooks/useScreenCapture";
 import type { TranscriptEntry } from "@/components/TranscriptPanel";
 import type { LangCode } from "@/lib/socketEvents";
 
@@ -58,6 +59,12 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
     lang: langConfig?.bcp47 ?? "ja-JP",
     onInterim: (text) => setInterimUser(text),
     onFinal: (text) => {
+      // Reject if recognized text matches what the avatar just said (echo)
+      const avatarText = lastAvatarTextRef.current;
+      if (avatarText && text.replace(/\s/g, "") === avatarText.replace(/\s/g, "")) {
+        setInterimUser("");
+        return;
+      }
       setInterimUser("");
       addEntry({ speaker: "user", text, isFinal: true });
       socketRef.current?.emit("speech:user", {
@@ -68,6 +75,28 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
       });
     },
   });
+
+  // Camera — auto-starts when call connects, streams frames to staff via screen:frame
+  const { startCapture: startCamera, stopCapture: stopCamera } = useScreenCapture({
+    fps: 5,
+    quality: 0.6,
+    width: 320,
+    height: 240,
+    onFrame: (frameData) => {
+      if (sessionIdRef.current) {
+        socketRef.current?.emit("screen:frame", { sessionId: sessionIdRef.current, frameData });
+      }
+    },
+  });
+
+  useEffect(() => {
+    if (phase === "in-call") {
+      startCamera("camera");
+    } else {
+      stopCamera();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
 
   // If speech recognition encounters a fatal error, reset micOnRef too
   useEffect(() => {
@@ -83,10 +112,15 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
       stopMic();
       micOnRef.current = false;
     } else {
+      // Clear echo detection ref: by the time user manually presses mic, TTS is done
+      lastAvatarTextRef.current = "";
       micOnRef.current = true;
       startMic(langConfig?.bcp47);
     }
   }, [stopMic, startMic, langConfig]);
+
+  // Track the most recent text the avatar spoke — used to filter echo
+  const lastAvatarTextRef = useRef<string>("");
 
   // Pause mic when tab goes to background (prevents cross-tab audio pickup)
   useEffect(() => {
@@ -142,13 +176,15 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
       if (payload.isFinal) {
         setInterimStaff("");
         addEntry({ speaker: "staff", text: payload.text, isFinal: true });
-        // Store for Web Speech Synthesis fallback
         setLatestStaffText(payload.text);
-        // Reset latestAudio so the next tts:audio triggers the effect
         setLatestAudio(undefined);
-        // Increment key so Avatar's fallback effect always fires — even for repeated text
         staffSpeechKeyRef.current += 1;
         setStaffSpeechKey(staffSpeechKeyRef.current);
+        lastAvatarTextRef.current = payload.text;
+        // Auto-OFF mic when staff speaks — user must press mic button to respond
+        stopMic();
+        micOnRef.current = false;
+        setInterimUser("");
       } else {
         setInterimStaff(payload.text);
       }
@@ -376,7 +412,7 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
                 type="text"
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") sendTextMessage(); }}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing && !e.repeat) { e.preventDefault(); sendTextMessage(); } }}
                 placeholder={listening ? "マイクON（テキスト入力も可）" : "テキストで送信（マイクの代わりに使用可）"}
                 className="flex-1 text-sm px-3 py-2 rounded-lg bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400"
               />

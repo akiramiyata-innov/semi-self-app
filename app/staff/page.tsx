@@ -113,6 +113,12 @@ export default function StaffPage() {
       });
 
       socketRef.current?.emit("speech:staff", { sessionId: sid, text, isFinal: true });
+
+      // Auto-OFF mic after sending — staff must press mic button again to speak
+      stopMic();
+      activeListeningSession.current = null;
+      setActiveListeningId(null);
+      micOnRef.current = false;
     },
   });
 
@@ -451,6 +457,11 @@ export default function StaffPage() {
                       return next;
                     });
                     socketRef.current?.emit("speech:staff", { sessionId: session.sessionId, text, isFinal: true });
+                    // Auto-OFF mic after sending — staff must press mic button again to speak
+                    stopMic();
+                    activeListeningSession.current = null;
+                    setActiveListeningId(null);
+                    micOnRef.current = false;
                   }}
                 />
               );
