@@ -1,15 +1,9 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import type { TranscriptEntry } from "@/lib/types";
 
-export interface TranscriptEntry {
-  id: string;
-  speaker: "user" | "staff";
-  text: string;
-  translatedText?: string;
-  isFinal: boolean;
-  timestamp: number;
-}
+export type { TranscriptEntry };
 
 interface TranscriptPanelProps {
   entries: TranscriptEntry[];

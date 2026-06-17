@@ -9,7 +9,7 @@ import { ScreenShareView } from "@/components/ScreenShareView";
 import { SUPPORTED_LANGS } from "@/lib/languages";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useScreenCapture } from "@/hooks/useScreenCapture";
-import type { TranscriptEntry } from "@/components/TranscriptPanel";
+import type { TranscriptEntry } from "@/lib/types";
 import type { LangCode } from "@/lib/socketEvents";
 
 type Phase = "lang-select" | "idle" | "calling" | "in-call" | "ended" | "rejected";

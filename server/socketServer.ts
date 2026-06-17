@@ -1,9 +1,12 @@
+import fs from "fs";
+import path from "path";
 import { Server, Socket } from "socket.io";
 import type { IncomingMessage, ServerResponse } from "http";
 import type { Server as HttpServer } from "http";
 import { getCached, setCache } from "../lib/translateCache";
 import { getLang, getGoogleTranslateLangCode } from "../lib/languages";
 import type { LangCode } from "../lib/socketEvents";
+import type { TranscriptEntry, SessionLog } from "../lib/types";
 
 // Read lazily inside functions so that .env.local is loaded by the time they're called
 function getApiKey(): string {
@@ -23,12 +26,41 @@ interface CallRecord {
 
 interface ActiveSession extends CallRecord {
   staffSocketId: string;
+  startedAt: number;
+  transcript: TranscriptEntry[];
 }
 
 const callQueue = new Map<string, CallRecord>();
 const activeSessions = new Map<string, ActiveSession>();
 
 let io: Server;
+let entryCounter = 0;
+
+async function saveSessionLog(session: ActiveSession): Promise<void> {
+  const endedAt = Date.now();
+  const log: SessionLog = {
+    sessionId: session.sessionId,
+    machineId: session.machineId,
+    machineName: session.machineName,
+    userLang: session.userLang,
+    startedAt: session.startedAt,
+    endedAt,
+    durationSeconds: Math.round((endedAt - session.startedAt) / 1000),
+    transcript: session.transcript,
+  };
+  const date = new Date(endedAt).toISOString().slice(0, 10);
+  const dir = path.join(process.cwd(), "logs", date);
+  try {
+    await fs.promises.mkdir(dir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(dir, `${session.sessionId}.json`),
+      JSON.stringify(log, null, 2)
+    );
+    console.log(`[log] saved: logs/${date}/${session.sessionId}.json (${session.transcript.length} entries)`);
+  } catch (e) {
+    console.error("[log] failed to save session log:", e);
+  }
+}
 
 async function translateText(text: string, from: string, to: string): Promise<string> {
   if (from === to) return text;
@@ -160,7 +192,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       if (!record) return;
 
       callQueue.delete(sessionId);
-      const session: ActiveSession = { ...record, staffSocketId: socket.id };
+      const session: ActiveSession = { ...record, staffSocketId: socket.id, startedAt: Date.now(), transcript: [] };
       activeSessions.set(sessionId, session);
 
       socket.join(`session:${sessionId}`);
@@ -186,8 +218,10 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     });
 
     // --- Either side ends the call ---
-    socket.on("call:end", (payload: { sessionId: string }) => {
+    socket.on("call:end", async (payload: { sessionId: string }) => {
       const { sessionId } = payload;
+      const session = activeSessions.get(sessionId);
+      if (session) await saveSessionLog(session);
       activeSessions.delete(sessionId);
       callQueue.delete(sessionId);
       io.to(`session:${sessionId}`).emit("call:ended", { sessionId });
@@ -212,6 +246,17 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         if (isFinal && lang !== "ja") {
           const fromCode = getGoogleTranslateLangCode(lang);
           translatedText = await translateText(text, fromCode, "ja");
+        }
+
+        if (isFinal) {
+          session.transcript.push({
+            id: `u-${Date.now()}-${entryCounter++}`,
+            speaker: "user",
+            text,
+            translatedText,
+            isFinal: true,
+            timestamp: Date.now(),
+          });
         }
 
         // Relay to staff socket
@@ -285,6 +330,15 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
             lang: userLang,
           });
         }
+
+        session.transcript.push({
+          id: `s-${Date.now()}-${entryCounter++}`,
+          speaker: "staff",
+          text,
+          translatedText: userLang !== "ja" ? translatedText : undefined,
+          isFinal: true,
+          timestamp: Date.now(),
+        });
       }
     );
 
@@ -315,6 +369,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     socket.on("disconnect", () => {
       activeSessions.forEach((session, sessionId) => {
         if (session.staffSocketId === socket.id || session.userSocketId === socket.id) {
+          saveSessionLog(session).catch((e) => console.error("[log] disconnect save error:", e));
           activeSessions.delete(sessionId);
           io.to(`session:${sessionId}`).emit("call:ended", { sessionId });
         }

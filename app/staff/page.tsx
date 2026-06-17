@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { io, Socket } from "socket.io-client";
-import { Wifi, WifiOff, Monitor, Mic } from "lucide-react";
+import { Wifi, WifiOff, Monitor, Mic, ClipboardList } from "lucide-react";
 import { CallQueueItem } from "@/components/CallQueueItem";
 import { ActiveCallPanel } from "@/components/ActiveCallPanel";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useScreenCapture } from "@/hooks/useScreenCapture";
-import type { TranscriptEntry } from "@/components/TranscriptPanel";
+import type { TranscriptEntry } from "@/lib/types";
 import type { LangCode } from "@/lib/socketEvents";
 
 interface IncomingCall {
@@ -386,7 +387,14 @@ export default function StaffPage() {
             ))}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            <Link
+              href="/logs"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium rounded-lg transition-colors"
+            >
+              <ClipboardList size={13} />
+              通話ログ
+            </Link>
             {connected ? (
               <span className="flex items-center gap-1.5 text-green-600 text-sm">
                 <Wifi size={14} /> 接続中

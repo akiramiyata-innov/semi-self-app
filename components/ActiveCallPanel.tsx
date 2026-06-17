@@ -5,7 +5,7 @@ import { Monitor, MonitorOff, Mic, MicOff, PhoneOff, Send } from "lucide-react";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { ScreenShareView } from "./ScreenShareView";
 import { SUPPORTED_LANGS } from "@/lib/languages";
-import type { TranscriptEntry } from "./TranscriptPanel";
+import type { TranscriptEntry } from "@/lib/types";
 import type { LangCode } from "@/lib/socketEvents";
 
 interface ActiveCallPanelProps {
