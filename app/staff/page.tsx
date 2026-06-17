@@ -319,6 +319,7 @@ export default function StaffPage() {
       stopCapture();
       captureSessionRef.current = null;
       updateSession(sessionId, { isCapturing: false });
+      socketRef.current?.emit("screen:share", { sessionId, frameData: "" });
     } else {
       // Stop previous capture if any
       if (captureSessionRef.current && captureSessionRef.current !== sessionId) {

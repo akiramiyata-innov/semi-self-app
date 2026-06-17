@@ -215,7 +215,7 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
     });
 
     s.on("screen:share", (payload: { frameData: string }) => {
-      setStaffScreenFrame(payload.frameData);
+      setStaffScreenFrame(payload.frameData || null);
     });
 
     return () => { s.disconnect(); };
