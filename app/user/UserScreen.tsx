@@ -73,6 +73,9 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
         lang: userLangRef.current,
         isFinal: true,
       });
+      // Auto-OFF mic after sending — user must press mic button again to speak
+      stopMic();
+      micOnRef.current = false;
     },
   });
 
@@ -134,6 +137,19 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, [stopMic, startMic, langConfig]);
+
+  // Space key shortcut: toggle mic (in-call only, not when typing in input)
+  useEffect(() => {
+    if (phase !== "in-call") return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      e.preventDefault();
+      toggleMic();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [phase, toggleMic]);
 
   // Socket.IO setup
   useEffect(() => {
@@ -346,12 +362,14 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
           <span className="text-xs text-gray-400">{SUPPORTED_LANGS.find((l) => l.code === userLang)?.label}</span>
           <button
             onClick={toggleMic}
+            title={listening ? "マイクOFF (Space)" : "マイクON (Space)"}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors text-sm ${
               listening ? "bg-blue-600 text-white" : "bg-gray-600 text-gray-300"
             }`}
           >
             {listening ? <Mic size={14} /> : <MicOff size={14} />}
             {listening ? "マイクON" : "マイクOFF"}
+            <span className="text-[10px] opacity-50 ml-0.5">[Space]</span>
           </button>
           <button
             onClick={endCall}

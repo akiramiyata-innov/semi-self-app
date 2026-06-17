@@ -288,6 +288,31 @@ export default function StaffPage() {
     }
   }, [stopMic, startMic]);
 
+  // Space key shortcut: toggle mic (not when typing in input)
+  // Uses refs so the handler is always registered once and reads latest values.
+  const activeSessionsRef = useRef(activeSessions);
+  useEffect(() => { activeSessionsRef.current = activeSessions; }, [activeSessions]);
+  const toggleMicRef = useRef(toggleMic);
+  useEffect(() => { toggleMicRef.current = toggleMic; }, [toggleMic]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      e.preventDefault();
+      const currentSid = activeListeningSession.current;
+      if (currentSid) {
+        toggleMicRef.current(currentSid);
+      } else {
+        const firstSid = Array.from(activeSessionsRef.current.keys())[0];
+        if (firstSid) toggleMicRef.current(firstSid);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const toggleScreenShare = useCallback(async (sessionId: string) => {
     if (captureSessionRef.current === sessionId && capturing) {
       stopCapture();

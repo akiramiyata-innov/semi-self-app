@@ -112,10 +112,11 @@ export function ActiveCallPanel({
                 ? "bg-blue-500 text-white hover:bg-blue-600"
                 : "bg-gray-200 text-gray-600 hover:bg-gray-300"
             }`}
-            title={isListening ? "マイクオフ" : "マイクオン"}
+            title={isListening ? "マイクOFF (Space)" : "マイクON (Space)"}
           >
             {isListening ? <Mic size={14} /> : <MicOff size={14} />}
             {isListening ? "マイクON" : "マイクOFF"}
+            <span className="text-[10px] opacity-50 ml-0.5">[Space]</span>
           </button>
           <button
             onClick={onToggleScreenShare}
