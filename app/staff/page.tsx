@@ -3,13 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { io, Socket } from "socket.io-client";
-import { Wifi, WifiOff, Monitor, Mic, ClipboardList } from "lucide-react";
+import { Wifi, WifiOff, Monitor, Mic, ClipboardList, Users, ChevronDown } from "lucide-react";
 import { CallQueueItem } from "@/components/CallQueueItem";
 import { ActiveCallPanel } from "@/components/ActiveCallPanel";
+import { Toast } from "@/components/Toast";
+import type { ToastItem } from "@/components/Toast";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useScreenCapture } from "@/hooks/useScreenCapture";
 import type { TranscriptEntry } from "@/lib/types";
-import type { LangCode } from "@/lib/socketEvents";
+import type { LangCode, StaffStatus, StaffInfo } from "@/lib/socketEvents";
 
 interface IncomingCall {
   sessionId: string;
@@ -72,6 +74,45 @@ export default function StaffPage() {
   const activeListeningSession = useRef<string | null>(null);
   const [activeListeningId, setActiveListeningId] = useState<string | null>(null);
   const micOnRef = useRef(false);
+
+  // ── Multi-operation: staff presence ──────────────────────────────────────
+  const staffNameRef = useRef("");
+  const [staffName, setStaffName] = useState<string | null>(null);
+  const [nameInput, setNameInput] = useState("");
+  const [myStatus, setMyStatus] = useState<StaffStatus>("available");
+  const [staffList, setStaffList] = useState<StaffInfo[]>([]);
+  const [showStaffList, setShowStaffList] = useState(false);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+
+  const addToast = useCallback((message: string, type: ToastItem["type"] = "info") => {
+    const id = Date.now().toString();
+    setToasts((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+  }, []);
+
+  // Check sessionStorage for saved name on mount (per-tab, not shared across tabs)
+  useEffect(() => {
+    const saved = sessionStorage.getItem("staffName");
+    if (saved) {
+      staffNameRef.current = saved;
+      setStaffName(saved);
+    }
+  }, []);
+
+  const submitName = useCallback(() => {
+    const name = nameInput.trim();
+    if (!name) return;
+    sessionStorage.setItem("staffName", name);
+    staffNameRef.current = name;
+    setStaffName(name);
+    socketRef.current?.emit("staff:join", { name });
+  }, [nameInput]);
+
+  const toggleStatus = useCallback(() => {
+    const next: StaffStatus = myStatus === "available" ? "away" : "available";
+    setMyStatus(next);
+    socketRef.current?.emit("staff:setStatus", { status: next });
+  }, [myStatus]);
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   const updateSession = useCallback((sessionId: string, update: Partial<ActiveSession>) => {
@@ -156,9 +197,19 @@ export default function StaffPage() {
 
     s.on("connect", () => {
       setConnected(true);
-      s.emit("staff:join");
+      s.emit("staff:join", { name: staffNameRef.current || "スタッフ" });
     });
     s.on("disconnect", () => setConnected(false));
+
+    s.on("staff:list", (payload: { staff: StaffInfo[] }) => {
+      setStaffList(payload.staff);
+      const me = payload.staff.find((sf) => sf.socketId === s.id);
+      if (me) setMyStatus(me.status);
+    });
+
+    s.on("call:alreadyTaken", () => {
+      addToast("別のスタッフが先に応答しました", "warning");
+    });
 
     s.on("call:incoming", (payload: IncomingCall) => {
       setCallQueue((prev) =>
@@ -228,6 +279,7 @@ export default function StaffPage() {
   // ── Actions ───────────────────────────────────────────────────────────────
   const answerCall = useCallback((call: IncomingCall) => {
     socketRef.current?.emit("call:answer", { sessionId: call.sessionId });
+    setMyStatus("busy"); // Optimistic: server confirms via staff:list
     setCallQueue((prev) => prev.filter((c) => c.sessionId !== call.sessionId));
     setTakenSessions((prev) => new Set([...prev, call.sessionId]));
     setActiveSessions((prev) => new Map([...prev, [call.sessionId, {
@@ -332,6 +384,14 @@ export default function StaffPage() {
     }
   }, [capturing, stopCapture, startCapture, updateSession]);
 
+  // Reset status to available when all sessions end
+  useEffect(() => {
+    if (activeSessions.size === 0 && myStatus === "busy") {
+      setMyStatus("available");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessions.size]);
+
   // ── Derived state ─────────────────────────────────────────────────────────
   const pendingCalls = callQueue.filter((c) => !takenSessions.has(c.sessionId));
   const sessions = Array.from(activeSessions.values());
@@ -339,10 +399,41 @@ export default function StaffPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
-      {/* Header */}
+
+      {/* ── 名前入力モーダル ────────────────────────────────────────────────── */}
+      {staffName === null && (
+        <div className="fixed inset-0 z-50 bg-blue-900/80 backdrop-blur-sm flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 w-80">
+            <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center mb-4">
+              <span className="text-white text-sm font-bold">遠隔</span>
+            </div>
+            <h2 className="text-lg font-bold text-gray-900 mb-1">スタッフ名を入力</h2>
+            <p className="text-sm text-gray-500 mb-5">キオスク画面に表示される名前です</p>
+            <input
+              type="text"
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitName()}
+              placeholder="例：田中"
+              autoFocus
+              className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 mb-3"
+            />
+            <button
+              onClick={submitName}
+              disabled={!nameInput.trim()}
+              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              開始する
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <header className="bg-white border-b border-gray-200 px-6 py-3 shrink-0">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between gap-4">
+          {/* Logo */}
+          <div className="flex items-center gap-3 shrink-0">
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
               <span className="text-white text-xs font-bold">遠隔</span>
             </div>
@@ -352,35 +443,96 @@ export default function StaffPage() {
             </div>
           </div>
 
-          {/* ▶ Mic permission test button — click to trigger getUserMedia dialog */}
+          {/* ── 自分のステータス ── */}
+          <div className="flex items-center gap-2">
+            {staffName && (
+              <span className="text-sm font-medium text-gray-700 hidden sm:inline">{staffName}</span>
+            )}
+            <button
+              onClick={myStatus !== "busy" ? toggleStatus : undefined}
+              disabled={myStatus === "busy"}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                myStatus === "available"
+                  ? "bg-green-100 text-green-700 hover:bg-green-200 cursor-pointer"
+                  : myStatus === "busy"
+                  ? "bg-blue-100 text-blue-700 cursor-default"
+                  : "bg-gray-100 text-gray-500 hover:bg-gray-200 cursor-pointer"
+              }`}
+              title={myStatus !== "busy" ? "クリックでステータス切替" : "通話中は変更できません"}
+            >
+              <span className={`w-2 h-2 rounded-full ${
+                myStatus === "available" ? "bg-green-500" :
+                myStatus === "busy" ? "bg-blue-500 animate-pulse" : "bg-gray-400"
+              }`} />
+              {myStatus === "available" ? "対応可" : myStatus === "busy" ? "対応中" : "離席"}
+            </button>
+          </div>
+
+          {/* ── オンラインスタッフ ── */}
+          <div className="relative">
+            <button
+              onClick={() => setShowStaffList((v) => !v)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <Users size={13} />
+              {staffList.length}名オンライン
+              <ChevronDown size={11} className={`transition-transform ${showStaffList ? "rotate-180" : ""}`} />
+            </button>
+            {showStaffList && (
+              <div className="absolute left-0 top-full mt-1 w-56 bg-white border border-gray-200 rounded-xl shadow-lg z-40 py-2">
+                {staffList.length === 0 ? (
+                  <p className="text-xs text-gray-400 px-3 py-2">スタッフなし</p>
+                ) : (
+                  staffList.map((sf) => (
+                    <div key={sf.socketId} className="flex items-center gap-2.5 px-3 py-2">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${
+                        sf.status === "available" ? "bg-green-500" :
+                        sf.status === "busy" ? "bg-blue-500" : "bg-gray-400"
+                      }`} />
+                      <span className="text-sm text-gray-800 flex-1 truncate">
+                        {sf.name}
+                        {sf.socketId === socketRef.current?.id && (
+                          <span className="text-gray-400 text-xs ml-1">(自分)</span>
+                        )}
+                      </span>
+                      <span className="text-xs text-gray-400 shrink-0">
+                        {sf.status === "available" ? "対応可" :
+                         sf.status === "busy" ? `${sf.activeCalls}件対応中` : "離席"}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ── マイク許可確認 ── */}
           <button
             onClick={async () => {
               try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 stream.getTracks().forEach((t) => t.stop());
-                alert("✅ マイクの許可が確認できました。マイクONボタンが使えるようになります。");
+                alert("✅ マイクの許可が確認できました。");
               } catch (e: unknown) {
                 const err = e as DOMException;
-                alert(`❌ getUserMedia エラー\nname: ${err.name}\nmessage: ${err.message}`);
+                alert(`❌ マイクエラー: ${err.name}`);
               }
             }}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-300 text-xs font-medium rounded-lg transition-colors"
-            title="クリックしてマイク許可ダイアログを表示"
           >
             <Mic size={12} />
             マイク許可確認
           </button>
 
-          {/* ▶ Kiosk machine links (from former landing page) */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-400 mr-1 hidden sm:inline">キオスク端末:</span>
+          {/* ── キオスク端末リンク ── */}
+          <div className="flex items-center gap-1.5">
             {KIOSK_MACHINES.map((m) => (
               <a
                 key={m.id}
                 href={`/user?machine=${m.id}&name=${encodeURIComponent(m.name)}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1 px-2.5 py-1 bg-gray-100 hover:bg-blue-50 hover:text-blue-700 text-gray-600 text-xs rounded-lg border border-gray-200 hover:border-blue-300 transition-colors"
+                className="flex items-center gap-1 px-2 py-1 bg-gray-100 hover:bg-blue-50 hover:text-blue-700 text-gray-600 text-xs rounded-lg border border-gray-200 hover:border-blue-300 transition-colors"
               >
                 <Monitor size={11} />
                 {m.name}
@@ -388,7 +540,8 @@ export default function StaffPage() {
             ))}
           </div>
 
-          <div className="flex items-center gap-3">
+          {/* ── ログ・接続状態 ── */}
+          <div className="flex items-center gap-3 shrink-0">
             <Link
               href="/logs"
               className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium rounded-lg transition-colors"
@@ -408,7 +561,6 @@ export default function StaffPage() {
           </div>
         </div>
 
-        {/* Mic error display */}
         {micError && (
           <div className="mt-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg text-red-700 text-xs whitespace-pre-line">
             ⚠️ {micError}
@@ -503,6 +655,9 @@ export default function StaffPage() {
           </div>
         )}
       </div>
+
+      {/* Toast notifications */}
+      <Toast toasts={toasts} />
     </div>
   );
 }

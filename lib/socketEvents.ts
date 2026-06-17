@@ -1,5 +1,15 @@
 export type LangCode = "ja" | "en" | "zh" | "ko" | "fr" | "es" | "th";
 
+// Staff presence
+export type StaffStatus = "available" | "busy" | "away";
+
+export interface StaffInfo {
+  socketId: string;
+  name: string;
+  status: StaffStatus;
+  activeCalls: number;
+}
+
 // Call lifecycle
 export interface CallRequestPayload {
   machineId: string;

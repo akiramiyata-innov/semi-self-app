@@ -5,16 +5,34 @@ import type { IncomingMessage, ServerResponse } from "http";
 import type { Server as HttpServer } from "http";
 import { getCached, setCache } from "../lib/translateCache";
 import { getLang, getGoogleTranslateLangCode } from "../lib/languages";
-import type { LangCode } from "../lib/socketEvents";
+import type { LangCode, StaffStatus } from "../lib/socketEvents";
 import type { TranscriptEntry, SessionLog } from "../lib/types";
 
-// Read lazily inside functions so that .env.local is loaded by the time they're called
 function getApiKey(): string {
   return process.env.GOOGLE_API_KEY || "";
 }
 
-const STAFF_NAME = "駅員";
+// ── Staff presence ────────────────────────────────────────────────────────────
+interface StaffRecord {
+  socketId: string;
+  name: string;
+  status: StaffStatus;
+  activeSessionIds: Set<string>;
+}
 
+const staffMap = new Map<string, StaffRecord>();
+
+function broadcastStaffList(): void {
+  const list = Array.from(staffMap.values()).map((s) => ({
+    socketId: s.socketId,
+    name: s.name,
+    status: s.status,
+    activeCalls: s.activeSessionIds.size,
+  }));
+  io.to("call-queue").emit("staff:list", { staff: list });
+}
+
+// ── Call state ────────────────────────────────────────────────────────────────
 interface CallRecord {
   sessionId: string;
   machineId: string;
@@ -36,6 +54,7 @@ const activeSessions = new Map<string, ActiveSession>();
 let io: Server;
 let entryCounter = 0;
 
+// ── Log saving ────────────────────────────────────────────────────────────────
 async function saveSessionLog(session: ActiveSession): Promise<void> {
   const endedAt = Date.now();
   const log: SessionLog = {
@@ -62,6 +81,18 @@ async function saveSessionLog(session: ActiveSession): Promise<void> {
   }
 }
 
+// ── Staff status helpers ──────────────────────────────────────────────────────
+function releaseSession(sessionId: string, staffSocketId: string): void {
+  const staff = staffMap.get(staffSocketId);
+  if (staff) {
+    staff.activeSessionIds.delete(sessionId);
+    if (staff.activeSessionIds.size === 0 && staff.status === "busy") {
+      staff.status = "available";
+    }
+  }
+}
+
+// ── Google APIs ───────────────────────────────────────────────────────────────
 async function translateText(text: string, from: string, to: string): Promise<string> {
   if (from === to) return text;
   const cached = getCached(text, from, to);
@@ -100,7 +131,7 @@ async function synthesizeSpeech(text: string, langCode: LangCode): Promise<strin
   const apiKey = getApiKey();
 
   if (!apiKey || apiKey === "your_google_api_key_here") {
-    console.warn(`[tts] SKIP (no API key): "${text}" [${langCode}] → will use browser Web Speech fallback`);
+    console.warn(`[tts] SKIP (no API key): "${text}" [${langCode}]`);
     return "";
   }
 
@@ -132,12 +163,11 @@ function generateSessionId(): string {
   return `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// ── Socket server ─────────────────────────────────────────────────────────────
 export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, typeof ServerResponse>): void {
-  // Warn here (after app.prepare()) so .env.local has been loaded by Next.js
   const apiKey = getApiKey();
   if (!apiKey || apiKey === "your_google_api_key_here") {
     console.warn("⚠️  [socketServer] GOOGLE_API_KEY is not configured!");
-    console.warn("    翻訳・TTSが動作しません。.env.local に GOOGLE_API_KEY を設定してサーバーを再起動してください。");
   } else {
     console.log(`✅ [socketServer] GOOGLE_API_KEY 設定済み (${apiKey.slice(0, 8)}...)`);
   }
@@ -148,21 +178,47 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
   });
 
   io.on("connection", (socket: Socket) => {
-    // --- Staff joins call queue room ---
-    socket.on("staff:join", () => {
+
+    // ── Staff joins ───────────────────────────────────────────────────────────
+    socket.on("staff:join", (payload?: { name?: string }) => {
+      const name = (payload?.name ?? "").trim() || "スタッフ";
+
+      // Re-register (handles reconnect or name change)
+      const existing = staffMap.get(socket.id);
+      staffMap.set(socket.id, {
+        socketId: socket.id,
+        name,
+        status: existing?.status ?? "available",
+        activeSessionIds: existing?.activeSessionIds ?? new Set(),
+      });
+
       socket.join("call-queue");
-      // Send current pending calls to newly joined staff
+
+      // Send current queue to this staff
       callQueue.forEach((call) => {
         socket.emit("call:incoming", {
           sessionId: call.sessionId,
           machineId: call.machineId,
           machineName: call.machineName,
+          userLang: call.userLang,
           timestamp: call.timestamp,
         });
       });
+
+      broadcastStaffList();
+      console.log(`[staff] joined: ${name} (${socket.id})`);
     });
 
-    // --- User requests a call ---
+    // ── Staff sets own status ─────────────────────────────────────────────────
+    socket.on("staff:setStatus", (payload: { status: "available" | "away" }) => {
+      const staff = staffMap.get(socket.id);
+      if (!staff) return;
+      if (staff.status === "busy" && staff.activeSessionIds.size > 0) return; // can't leave busy while in call
+      staff.status = payload.status;
+      broadcastStaffList();
+    });
+
+    // ── User requests a call ──────────────────────────────────────────────────
     socket.on("call:request", (payload: { machineId: string; machineName: string; userLang?: LangCode }) => {
       const sessionId = generateSessionId();
       const record: CallRecord = {
@@ -185,51 +241,70 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       });
     });
 
-    // --- Staff answers a call ---
+    // ── Staff answers a call ──────────────────────────────────────────────────
     socket.on("call:answer", async (payload: { sessionId: string }) => {
       const { sessionId } = payload;
       const record = callQueue.get(sessionId);
-      if (!record) return;
+
+      if (!record) {
+        // Race condition: another staff already answered
+        socket.emit("call:alreadyTaken", { sessionId });
+        return;
+      }
 
       callQueue.delete(sessionId);
-      const session: ActiveSession = { ...record, staffSocketId: socket.id, startedAt: Date.now(), transcript: [] };
+      const session: ActiveSession = {
+        ...record,
+        staffSocketId: socket.id,
+        startedAt: Date.now(),
+        transcript: [],
+      };
       activeSessions.set(sessionId, session);
-
       socket.join(`session:${sessionId}`);
 
-      // Notify other staff this call was taken
-      io.to("call-queue").emit("call:taken", { sessionId });
+      // Update staff status to busy
+      const staff = staffMap.get(socket.id);
+      if (staff) {
+        staff.status = "busy";
+        staff.activeSessionIds.add(sessionId);
+      }
 
-      // Notify the user
+      io.to("call-queue").emit("call:taken", { sessionId });
       io.to(record.userSocketId).emit("call:answered", {
         sessionId,
-        staffName: STAFF_NAME,
+        staffName: staff?.name ?? "駅員",
       });
+
+      broadcastStaffList();
     });
 
-    // --- Staff rejects a call (before answering) ---
+    // ── Staff rejects a call ──────────────────────────────────────────────────
     socket.on("call:reject", (payload: { sessionId: string }) => {
       const { sessionId } = payload;
       const record = callQueue.get(sessionId);
       if (!record) return;
       callQueue.delete(sessionId);
       io.to(record.userSocketId).emit("call:rejected", { sessionId });
-      io.to("call-queue").emit("call:taken", { sessionId }); // remove from other staff queues too
+      io.to("call-queue").emit("call:taken", { sessionId });
     });
 
-    // --- Either side ends the call ---
+    // ── Call ends ─────────────────────────────────────────────────────────────
     socket.on("call:end", async (payload: { sessionId: string }) => {
       const { sessionId } = payload;
       const session = activeSessions.get(sessionId);
-      if (session) await saveSessionLog(session);
+      if (session) {
+        await saveSessionLog(session);
+        releaseSession(sessionId, session.staffSocketId);
+      }
       activeSessions.delete(sessionId);
       callQueue.delete(sessionId);
       io.to(`session:${sessionId}`).emit("call:ended", { sessionId });
-      // Clean up room membership
+      io.to("call-queue").emit("call:ended", { sessionId }); // Notify all staff to clear the call
       socket.leave(`session:${sessionId}`);
+      broadcastStaffList();
     });
 
-    // --- User speaking ---
+    // ── Speech: user → staff ──────────────────────────────────────────────────
     socket.on(
       "speech:user",
       async (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean }) => {
@@ -237,10 +312,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         const session = activeSessions.get(sessionId);
         if (!session) return;
 
-        // Update session lang
-        if (lang !== session.userLang) {
-          session.userLang = lang;
-        }
+        if (lang !== session.userLang) session.userLang = lang;
 
         let translatedText: string | undefined;
         if (isFinal && lang !== "ja") {
@@ -259,18 +331,11 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           });
         }
 
-        // Relay to staff socket
-        io.to(session.staffSocketId).emit("speech:user", {
-          sessionId,
-          text,
-          lang,
-          isFinal,
-          translatedText,
-        });
+        io.to(session.staffSocketId).emit("speech:user", { sessionId, text, lang, isFinal, translatedText });
       }
     );
 
-    // --- Staff speaking ---
+    // ── Speech: staff → user ──────────────────────────────────────────────────
     socket.on(
       "speech:staff",
       async (payload: { sessionId: string; text: string; isFinal: boolean }) => {
@@ -283,12 +348,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         let audioBase64 = "";
 
         if (!isFinal) {
-          // Interim: relay staff text only (no TTS, no translation)
-          io.to(session.staffSocketId).emit("speech:staff", {
-            sessionId,
-            text,
-            isFinal: false,
-          });
+          io.to(session.staffSocketId).emit("speech:staff", { sessionId, text, isFinal: false });
           io.to(session.userSocketId).emit("speech:staff", {
             sessionId,
             text: userLang === "ja" ? text : "",
@@ -297,7 +357,6 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           return;
         }
 
-        // Final: translate and synthesize
         if (userLang !== "ja") {
           const toCode = getGoogleTranslateLangCode(userLang);
           translatedText = await translateText(text, "ja", toCode);
@@ -307,28 +366,15 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           audioBase64 = await synthesizeSpeech(text, "ja");
         }
 
-        // To staff: original Japanese + translated version
         io.to(session.staffSocketId).emit("speech:staff", {
-          sessionId,
-          text,
-          isFinal: true,
+          sessionId, text, isFinal: true,
           translatedText: userLang !== "ja" ? translatedText : undefined,
         });
 
-        // To user: translated text
-        io.to(session.userSocketId).emit("speech:staff", {
-          sessionId,
-          text: translatedText,
-          isFinal: true,
-        });
+        io.to(session.userSocketId).emit("speech:staff", { sessionId, text: translatedText, isFinal: true });
 
-        // TTS audio to user
         if (audioBase64) {
-          io.to(session.userSocketId).emit("tts:audio", {
-            sessionId,
-            audioBase64,
-            lang: userLang,
-          });
+          io.to(session.userSocketId).emit("tts:audio", { sessionId, audioBase64, lang: userLang });
         }
 
         session.transcript.push({
@@ -342,16 +388,15 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       }
     );
 
-    // --- Screen share from staff to user ---
+    // ── Screen share (staff → user) ───────────────────────────────────────────
     socket.on("screen:share", (payload: { sessionId: string; frameData: string }) => {
       const { sessionId, frameData } = payload;
       const session = activeSessions.get(sessionId);
       if (!session) return;
-      // Use socket.to() to send to everyone in the session room EXCEPT the sender (staff)
       socket.to(`session:${sessionId}`).emit("screen:share", { sessionId, frameData });
     });
 
-    // --- Camera frame from user to staff ---
+    // ── Camera frame (user → staff) ───────────────────────────────────────────
     socket.on("screen:frame", (payload: { sessionId: string; frameData: string }) => {
       const { sessionId, frameData } = payload;
       const session = activeSessions.get(sessionId);
@@ -359,27 +404,39 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       io.to(session.staffSocketId).emit("screen:frame", { sessionId, frameData });
     });
 
-    // --- Language update from user ---
+    // ── Language update ───────────────────────────────────────────────────────
     socket.on("session:setLang", (payload: { sessionId: string; lang: LangCode }) => {
       const session = activeSessions.get(payload.sessionId);
       if (session) session.userLang = payload.lang;
     });
 
-    // --- Disconnect cleanup ---
+    // ── Disconnect cleanup ────────────────────────────────────────────────────
     socket.on("disconnect", () => {
+      staffMap.delete(socket.id);
+
       activeSessions.forEach((session, sessionId) => {
         if (session.staffSocketId === socket.id || session.userSocketId === socket.id) {
           saveSessionLog(session).catch((e) => console.error("[log] disconnect save error:", e));
+
+          // If user disconnected, free the staff member
+          if (session.userSocketId === socket.id) {
+            releaseSession(sessionId, session.staffSocketId);
+          }
+
           activeSessions.delete(sessionId);
           io.to(`session:${sessionId}`).emit("call:ended", { sessionId });
+          io.to("call-queue").emit("call:ended", { sessionId }); // Notify all staff to clear the call
         }
       });
+
       callQueue.forEach((record, sessionId) => {
         if (record.userSocketId === socket.id) {
           callQueue.delete(sessionId);
           io.to("call-queue").emit("call:taken", { sessionId });
         }
       });
+
+      broadcastStaffList();
     });
   });
 }
