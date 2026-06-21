@@ -2,9 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
-import { PhoneCall, PhoneOff, Mic, MicOff, Send } from "lucide-react";
+import { PhoneCall, PhoneOff, Mic, X } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
-import { TranscriptPanel } from "@/components/TranscriptPanel";
 import { ScreenShareView } from "@/components/ScreenShareView";
 import { SUPPORTED_LANGS } from "@/lib/languages";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
@@ -45,9 +44,8 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
 
   const sessionIdRef = useRef<string | null>(null);
   const userLangRef = useRef<LangCode>("ja");
-  // Track "user wants mic on" separately from the hook's listening state
-  // (needed for visibilitychange: we resume if mic was intentionally on)
   const micOnRef = useRef(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   const addEntry = useCallback((entry: Omit<TranscriptEntry, "id" | "timestamp">) => {
     setTranscript((prev) => [...prev, { ...entry, id: makeId(), timestamp: Date.now() }]);
@@ -224,6 +222,10 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
 
   useEffect(() => { userLangRef.current = userLang; }, [userLang]);
 
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [transcript, interimStaff]);
+
   const selectLang = (code: LangCode) => {
     setUserLang(code);
     setPhase("idle");
@@ -348,102 +350,103 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
 
   // --- In-Call ---
   return (
-    <div className="h-screen bg-gray-900 flex flex-col overflow-hidden">
-      {/* Top bar */}
-      <div className="flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-700 shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
-          </span>
-          <span className="text-gray-200 text-sm">{machineName} — 通話中</span>
+    <div
+      className="h-screen flex overflow-hidden"
+      style={{ background: "linear-gradient(180deg, #c5e9f8 0%, #9dd4ef 100%)" }}
+    >
+      {/* LEFT: title + chat + controls */}
+      <div className="flex flex-col w-[58%] px-8 pt-8 pb-6 overflow-hidden">
+        <h1 className="text-4xl font-bold text-gray-800 mb-5 shrink-0">
+          ご用件をお伺いします。
+        </h1>
+
+        {/* Chat bubbles */}
+        <div className="flex-1 overflow-y-auto flex flex-col gap-4 pr-1">
+          {transcript.map((entry) => (
+            <div
+              key={entry.id}
+              className={`rounded-3xl px-7 py-4 text-2xl font-medium leading-snug max-w-[90%] shadow-sm ${
+                entry.speaker === "user"
+                  ? "bg-amber-300 text-gray-900"
+                  : "bg-sky-200 text-gray-900"
+              }`}
+            >
+              {entry.text}
+            </div>
+          ))}
+
+          {interimStaff && (
+            <div className="rounded-3xl px-7 py-4 text-2xl text-gray-400 italic max-w-[90%] bg-sky-100 shadow-sm">
+              {interimStaff}
+            </div>
+          )}
+
+          <div ref={chatEndRef} />
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-400">{SUPPORTED_LANGS.find((l) => l.code === userLang)?.label}</span>
-          <button
-            onClick={toggleMic}
-            title={listening ? "マイクOFF (Space)" : "マイクON (Space)"}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors text-sm ${
-              listening ? "bg-blue-600 text-white" : "bg-gray-600 text-gray-300"
-            }`}
-          >
-            {listening ? <Mic size={14} /> : <MicOff size={14} />}
-            {listening ? "マイクON" : "マイクOFF"}
-            <span className="text-[10px] opacity-50 ml-0.5">[Space]</span>
-          </button>
+
+        {/* Bottom controls */}
+        <div className="flex items-center gap-4 mt-6 shrink-0">
           <button
             onClick={endCall}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white text-sm rounded-lg transition-colors"
+            className="flex items-center gap-2 px-7 py-4 bg-pink-400 hover:bg-pink-500 active:scale-95 text-white rounded-full text-xl font-semibold shadow-lg transition-all shrink-0"
           >
-            <PhoneOff size={14} />
-            対話終了
+            <X size={24} />
+            キャンセル
+          </button>
+
+          <button
+            onClick={toggleMic}
+            className="flex-1 flex items-center gap-4 bg-white rounded-2xl px-5 py-4 shadow-md hover:bg-gray-50 active:scale-[0.98] transition-all text-left"
+          >
+            <div
+              className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 relative transition-colors ${
+                listening ? "bg-pink-400" : "bg-gray-300"
+              }`}
+            >
+              {listening && (
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-pink-300 opacity-60 rounded-full" />
+              )}
+              <Mic size={22} className="text-white relative z-10" />
+            </div>
+            <div className="flex-1 overflow-hidden">
+              {listening ? (
+                <p className="text-lg text-gray-700 leading-relaxed line-clamp-2">
+                  <span className="font-semibold">Listening...</span>
+                  {interimUser && <span className="ml-2 text-gray-500">{interimUser}</span>}
+                </p>
+              ) : micError ? (
+                <p className="text-base text-red-500">{micError}</p>
+              ) : (
+                <p className="text-gray-400 text-lg">
+                  タップしてマイクをON
+                  <span className="ml-2 text-sm opacity-60">[スペースキー]</span>
+                </p>
+              )}
+            </div>
           </button>
         </div>
       </div>
 
-      {/* Mic error — shown inline below top bar */}
-      {micError && (
-        <div className="bg-red-900/80 border-b border-red-700 px-4 py-2 text-red-200 text-xs shrink-0 whitespace-pre-line">
-          ⚠️ {micError}
-        </div>
-      )}
-
-      {/* Main */}
-      <div className="flex flex-1 overflow-hidden">
-        <div className="flex flex-col flex-1 overflow-hidden">
-          {/* Avatar section */}
-          <div className="bg-gray-800 flex items-center justify-center py-6 shrink-0">
-            <Avatar
-              audioBase64={latestAudio}
-              fallbackText={latestStaffText}
-              fallbackKey={staffSpeechKey}
-              fallbackLang={userLang}
-              visible
-              size="lg"
+      {/* RIGHT: Screen share (when active) + Avatar */}
+      <div className="w-[42%] flex flex-col bg-white/20">
+        {staffScreenFrame && (
+          <div className="p-4 pb-2 shrink-0">
+            <ScreenShareView
+              frameData={staffScreenFrame}
+              label="スタッフ画面"
+              className="h-52 w-full rounded-xl overflow-hidden border-2 border-sky-400"
             />
           </div>
-
-          {/* Staff screen share — shown prominently below avatar when active */}
-          {staffScreenFrame && (
-            <div className="bg-gray-900 border-t-2 border-blue-500 shrink-0 p-2">
-              <ScreenShareView
-                frameData={staffScreenFrame}
-                label="スタッフ共有画面 / Staff Screen"
-                className="h-48 w-full"
-              />
-            </div>
-          )}
-
-          {/* Transcript */}
-          <div className="flex-1 overflow-hidden bg-white">
-            <TranscriptPanel
-              entries={transcript}
-              interimUserText={interimUser}
-              interimStaffText={interimStaff}
-            />
-          </div>
-
-          {/* Text input fallback */}
-          <div className="border-t border-gray-700 bg-gray-800 px-4 py-3 shrink-0">
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing && !e.repeat) { e.preventDefault(); sendTextMessage(); } }}
-                placeholder={listening ? "マイクON（テキスト入力も可）" : "テキストで送信（マイクの代わりに使用可）"}
-                className="flex-1 text-sm px-3 py-2 rounded-lg bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400"
-              />
-              <button
-                onClick={sendTextMessage}
-                disabled={!inputText.trim()}
-                className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white text-sm rounded-lg transition-colors"
-              >
-                <Send size={14} />
-                送信
-              </button>
-            </div>
-          </div>
+        )}
+        <div className="flex-1 flex items-end justify-center">
+          <Avatar
+            audioBase64={latestAudio}
+            fallbackText={latestStaffText}
+            fallbackKey={staffSpeechKey}
+            fallbackLang={userLang}
+            visible
+            size="xl"
+          />
         </div>
       </div>
     </div>

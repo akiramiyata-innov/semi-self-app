@@ -17,10 +17,10 @@ interface AvatarProps {
   fallbackKey?: number;
   onSpeakingChange?: (speaking: boolean) => void;
   visible?: boolean;
-  size?: "sm" | "md" | "lg";
+  size?: "sm" | "md" | "lg" | "xl";
 }
 
-const SIZE_MAP = { sm: 120, md: 200, lg: 280 };
+const SIZE_MAP = { sm: 120, md: 200, lg: 280, xl: 480 };
 
 export function Avatar({
   audioBase64,
