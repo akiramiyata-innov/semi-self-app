@@ -127,6 +127,8 @@ export default function StaffPage() {
   // ── Speech Recognition ───────────────────────────────────────────────────
   const { start: startMic, stop: stopMic, listening, error: micError, manualStop } = useSpeechRecognition({
     lang: "ja-JP",
+    // Edge: 無音でOFFしたとき onFinal は発火しない → onStop で必ずセッションをクリア
+    onStop: () => { activeListeningSession.current = null; },
     onInterim: (text) => {
       const sid = activeListeningSession.current;
       if (!sid) return;

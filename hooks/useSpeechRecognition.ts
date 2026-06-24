@@ -6,6 +6,7 @@ interface UseSpeechRecognitionOptions {
   lang?: string;
   onInterim?: (text: string) => void;
   onFinal?: (text: string) => void;
+  onStop?: () => void; // Edge: 録音停止時に必ず呼ばれる（無音でも）
 }
 
 type SpeechRecognitionCtor = new () => SpeechRecognition;
@@ -44,7 +45,7 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: UseSpeechRecognitionOptions) {
+export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onStop }: UseSpeechRecognitionOptions) {
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,6 +53,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
   const langRef = useRef(lang);
   const onInterimRef = useRef(onInterim);
   const onFinalRef = useRef(onFinal);
+  const onStopRef = useRef(onStop);
 
   // Edge has webkitSpeechRecognition but it fails with network errors — force Google STT
   const isEdge = typeof navigator !== "undefined" && /Edg\//.test(navigator.userAgent);
@@ -60,6 +62,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
   useEffect(() => { langRef.current = lang; }, [lang]);
   useEffect(() => { onInterimRef.current = onInterim; }, [onInterim]);
   useEffect(() => { onFinalRef.current = onFinal; }, [onFinal]);
+  useEffect(() => { onStopRef.current = onStop; }, [onStop]);
 
   // ── Web Speech API refs ────────────────────────────────────────────────────
   const recognitionRef = useRef<SpeechRecognition | null>(null);
@@ -105,6 +108,8 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
       stream.getTracks().forEach((t) => t.stop());
       const blob = new Blob(chunks, { type: mimeType });
       if (blob.size >= 500) await transcribeBlob(blob);
+      // 音声あり・なしに関わらず必ず呼ぶ（無音OFFでも activeListeningSession をクリアするため）
+      onStopRef.current?.();
     };
     recorder.start(200);
   }, [transcribeBlob]);
