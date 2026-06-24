@@ -8,10 +8,7 @@ export function useSocket() {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    const socketUrl = typeof window !== "undefined"
-      ? window.location.origin
-      : (process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001");
-    const s = io(socketUrl, {
+    const s = io({
       path: "/socket.io",
       transports: ["websocket", "polling"],
     });
