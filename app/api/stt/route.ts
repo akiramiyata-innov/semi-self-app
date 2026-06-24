@@ -19,7 +19,6 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         config: {
           encoding: "WEBM_OPUS",
-          sampleRateHertz: 48000,
           languageCode: lang || "ja-JP",
           enableAutomaticPunctuation: true,
         },
