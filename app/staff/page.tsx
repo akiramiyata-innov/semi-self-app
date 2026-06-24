@@ -323,9 +323,10 @@ export default function StaffPage() {
   const toggleMic = useCallback((sessionId: string) => {
     if (activeListeningSession.current === sessionId) {
       // Turn off
+      // activeListeningSession.current は onFinal でクリアする
+      // (Edge/GST では onFinal が非同期で遅れて発火するため、ここで先にクリアすると sid=null になる)
       stopMic();
-      activeListeningSession.current = null;
-      setActiveListeningId(null);  // ▶ Fix: update state so UI re-renders
+      setActiveListeningId(null);
       micOnRef.current = false;
     } else {
       // Turn off previous session's mic first
