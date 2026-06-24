@@ -9,8 +9,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ transcript: "" }, { status: 500 });
   }
 
-  console.log(`[STT] 受信 lang=${lang} audio=${audio.length} chars`);
-
   const res = await fetch(
     `https://speech.googleapis.com/v1/speech:recognize?key=${apiKey}`,
     {
@@ -32,8 +30,6 @@ export async function POST(req: NextRequest) {
     error?: { message: string; code?: number };
   };
 
-  console.log("[STT] Google応答:", JSON.stringify(json).slice(0, 300));
-
   if (json.error) {
     console.error("[STT] APIエラー:", json.error.message);
     return NextResponse.json({ transcript: "", error: json.error.message }, { status: 500 });
@@ -43,6 +39,5 @@ export async function POST(req: NextRequest) {
   const transcript = json.results
     ?.map((r) => r.alternatives?.[0]?.transcript ?? "")
     .join("") ?? "";
-  console.log(`[STT] 結果: "${transcript}"`);
   return NextResponse.json({ transcript });
 }

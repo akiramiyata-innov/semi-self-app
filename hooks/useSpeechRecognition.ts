@@ -76,14 +76,12 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
     if (blob.size < 500) return;
     try {
       const base64 = await blobToBase64(blob);
-      console.log(`[D4b] fetch /api/stt: base64.length=${base64.length}, lang=${langRef.current}`);
       const res = await fetch("/api/stt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ audio: base64, lang: langRef.current }),
       });
       const json = await res.json() as { transcript?: string; error?: string };
-      console.log(`[D6] STT response: status=${res.status}, transcript="${json.transcript}", error="${json.error}"`);
       if (json.transcript) {
         onInterimRef.current?.("");
         onFinalRef.current?.(json.transcript);
@@ -98,29 +96,17 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
     const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
       ? "audio/webm;codecs=opus" : "audio/webm";
 
-    console.log(`[D1] startGstManual: mimeType=${mimeType}`);
-
     const chunks: Blob[] = [];
     const recorder = new MediaRecorder(stream, { mimeType });
     gstCurrentRecorderRef.current = recorder;
 
-    recorder.ondataavailable = (e) => {
-      console.log(`[D2] ondataavailable: size=${e.data.size}`);
-      if (e.data.size > 0) chunks.push(e.data);
-    };
+    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
     recorder.onstop = async () => {
-      const blob = new Blob(chunks, { type: mimeType });
-      console.log(`[D3] onstop: chunks=${chunks.length}, blob.size=${blob.size}`);
       stream.getTracks().forEach((t) => t.stop());
-      if (blob.size >= 500) {
-        console.log(`[D4] → transcribeBlob 呼び出し`);
-        await transcribeBlob(blob);
-      } else {
-        console.log(`[D4] → blob小さすぎ、スキップ`);
-      }
+      const blob = new Blob(chunks, { type: mimeType });
+      if (blob.size >= 500) await transcribeBlob(blob);
     };
     recorder.start(200);
-    console.log(`[D1] recorder.start(200) 完了, state=${recorder.state}`);
   }, [transcribeBlob]);
 
   // ── Web Speech API: core recognition instance ──────────────────────────────
@@ -220,7 +206,6 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
 
     } else {
       // Edge / other browsers path: Google Cloud STT（手動ON/OFF）
-      console.log(`[D0] Edge path 開始: isEdge=${/Edg\//.test(navigator.userAgent)}`);
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         gstStreamRef.current = stream;
@@ -248,7 +233,6 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
     } else {
       const rec = gstCurrentRecorderRef.current;
       const stream = gstStreamRef.current;
-      console.log(`[D5] stop() GST path: rec.state=${rec?.state}`);
       gstCurrentRecorderRef.current = null;
       gstStreamRef.current = null;
       if (rec?.state !== "inactive") {
