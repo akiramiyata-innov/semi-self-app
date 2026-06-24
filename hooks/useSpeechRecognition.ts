@@ -93,7 +93,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
 
   // ── Google STT: 手動ON/OFF（Push-to-Talk）────────────────────────────────
   // マイクON → 録音開始、マイクOFF → 録音停止 → STTへ送信 → テキスト表示
-  // VAD（自動音声検知）は使用しない → 途中で切れない
+  // ポイント: ストリームは onstop の中で止める（stop()で先に止めると最終データが失われる）
   const startGstManual = useCallback((stream: MediaStream) => {
     const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
       ? "audio/webm;codecs=opus" : "audio/webm";
@@ -102,12 +102,15 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
     const recorder = new MediaRecorder(stream, { mimeType });
     gstCurrentRecorderRef.current = recorder;
 
+    // 200ms ごとにデータ取得（timeslice） → onstop時点で必ずchunksにデータが入っている
     recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
     recorder.onstop = async () => {
+      // 最終データが確定してからストリームを閉じる
+      stream.getTracks().forEach((t) => t.stop());
       const blob = new Blob(chunks, { type: mimeType });
       if (blob.size >= 500) await transcribeBlob(blob);
     };
-    recorder.start();
+    recorder.start(200);
   }, [transcribeBlob]);
 
   // ── Web Speech API: core recognition instance ──────────────────────────────
@@ -232,12 +235,16 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
       recognitionRef.current = null;
       try { rec?.stop(); } catch { /* ignore */ }
     } else {
-      if (gstCurrentRecorderRef.current?.state !== "inactive") {
-        gstCurrentRecorderRef.current?.stop(); // onstop → transcribeBlob
-      }
+      const rec = gstCurrentRecorderRef.current;
+      const stream = gstStreamRef.current;
       gstCurrentRecorderRef.current = null;
-      gstStreamRef.current?.getTracks().forEach((t) => t.stop());
       gstStreamRef.current = null;
+      if (rec?.state !== "inactive") {
+        rec?.stop(); // → ondataavailable → onstop → stream.getTracks().stop() → transcribeBlob
+      } else {
+        // recorder がすでに停止済みの場合はストリームを手動で止める
+        stream?.getTracks().forEach((t) => t.stop());
+      }
     }
     setListening(false);
     setError(null);
