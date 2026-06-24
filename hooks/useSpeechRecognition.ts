@@ -67,21 +67,20 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
 
   // ── Google STT refs ────────────────────────────────────────────────────────
   const gstStreamRef = useRef<MediaStream | null>(null);
+  const gstAudioContextRef = useRef<AudioContext | null>(null);
+  const gstAnimFrameRef = useRef<number>(0);
 
   // ── Google STT: transcribe one audio blob ──────────────────────────────────
   const transcribeBlob = useCallback(async (blob: Blob) => {
-    console.log(`[GoogleSTT] blob size=${blob.size} type=${blob.type}`);
-    if (blob.size < 500) { console.warn("[GoogleSTT] blob too small, skip"); return; }
+    if (blob.size < 500) return;
     try {
       const base64 = await blobToBase64(blob);
-      console.log(`[GoogleSTT] base64 length=${base64.length} lang=${langRef.current}`);
       const res = await fetch("/api/stt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ audio: base64, lang: langRef.current }),
       });
-      const json = await res.json() as { transcript?: string; error?: string };
-      console.log("[GoogleSTT] response:", json);
+      const json = await res.json() as { transcript?: string };
       if (json.transcript) {
         onInterimRef.current?.("");
         onFinalRef.current?.(json.transcript);
@@ -91,28 +90,77 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
     }
   }, []);
 
-  // ── Google STT: record CHUNK_MS then transcribe, loop while active ─────────
-  const startGstChunk = useCallback((stream: MediaStream) => {
-    if (!activeRef.current) return;
+  // ── Google STT: VAD（音声検知型）録音 ──────────────────────────────────────
+  // 話し始めたら録音開始 → 無音800ms続いたら停止してSTTへ送信
+  const startGstWithVAD = useCallback((stream: MediaStream) => {
+    const SPEECH_THRESHOLD = 15; // RMS閾値（0〜128、これ以上で発話判定）
+    const SILENCE_DURATION = 800; // 無音がこのms続いたら発話終了と判定
+    const MIN_SPEECH_MS = 200; // これより短い録音は送信しない
 
     const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
       ? "audio/webm;codecs=opus"
       : "audio/webm";
 
-    const recorder = new MediaRecorder(stream, { mimeType });
-    const chunks: Blob[] = [];
+    const audioContext = new AudioContext();
+    gstAudioContextRef.current = audioContext;
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 256;
+    audioContext.createMediaStreamSource(stream).connect(analyser);
+    const dataArray = new Uint8Array(analyser.fftSize);
 
-    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-    recorder.onstop = async () => {
-      const blob = new Blob(chunks, { type: mimeType });
-      await transcribeBlob(blob);
-      if (activeRef.current) startGstChunk(stream);
+    let recorder: MediaRecorder | null = null;
+    let chunks: Blob[] = [];
+    let isSpeaking = false;
+    let silenceTimer: ReturnType<typeof setTimeout> | null = null;
+    let speechStartTime = 0;
+
+    const startRec = () => {
+      if (recorder && recorder.state !== "inactive") return;
+      chunks = [];
+      recorder = new MediaRecorder(stream, { mimeType });
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+      recorder.onstop = async () => {
+        if (Date.now() - speechStartTime >= MIN_SPEECH_MS) {
+          await transcribeBlob(new Blob(chunks, { type: mimeType }));
+        }
+        recorder = null;
+      };
+      recorder.start();
+      speechStartTime = Date.now();
     };
 
-    recorder.start();
-    setTimeout(() => {
-      if (recorder.state !== "inactive") recorder.stop();
-    }, 3000);
+    const stopRec = () => {
+      if (recorder && recorder.state !== "inactive") recorder.stop();
+    };
+
+    const loop = () => {
+      if (!activeRef.current) { stopRec(); audioContext.close(); return; }
+
+      analyser.getByteTimeDomainData(dataArray);
+      const rms = Math.sqrt(
+        dataArray.reduce((sum, v) => sum + Math.pow(v - 128, 2), 0) / dataArray.length
+      );
+
+      if (rms > SPEECH_THRESHOLD) {
+        if (!isSpeaking) {
+          isSpeaking = true;
+          if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
+          startRec();
+        }
+      } else {
+        if (isSpeaking && !silenceTimer) {
+          silenceTimer = setTimeout(() => {
+            isSpeaking = false;
+            silenceTimer = null;
+            stopRec();
+          }, SILENCE_DURATION);
+        }
+      }
+
+      gstAnimFrameRef.current = requestAnimationFrame(loop);
+    };
+
+    gstAnimFrameRef.current = requestAnimationFrame(loop);
   }, [transcribeBlob]);
 
   // ── Web Speech API: core recognition instance ──────────────────────────────
@@ -211,13 +259,13 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
       setTimeout(() => { if (activeRef.current) startInternalRef.current(); }, 100);
 
     } else {
-      // Edge / other browsers path: Google Cloud STT via MediaRecorder
+      // Edge / other browsers path: Google Cloud STT via VAD
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         gstStreamRef.current = stream;
         activeRef.current = true;
         setListening(true);
-        startGstChunk(stream);
+        startGstWithVAD(stream);
       } catch (e) {
         const err = e as DOMException;
         setError(
@@ -227,7 +275,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
         );
       }
     }
-  }, [useWebSpeech, startGstChunk]);
+  }, [useWebSpeech, startGstWithVAD]);
 
   // ── Public: stop ───────────────────────────────────────────────────────────
   const stop = useCallback(() => {
@@ -237,6 +285,9 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
       recognitionRef.current = null;
       try { rec?.stop(); } catch { /* ignore */ }
     } else {
+      cancelAnimationFrame(gstAnimFrameRef.current);
+      gstAudioContextRef.current?.close();
+      gstAudioContextRef.current = null;
       gstStreamRef.current?.getTracks().forEach((t) => t.stop());
       gstStreamRef.current = null;
     }
@@ -248,6 +299,8 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
   useEffect(() => {
     return () => {
       activeRef.current = false;
+      cancelAnimationFrame(gstAnimFrameRef.current);
+      gstAudioContextRef.current?.close();
       const rec = recognitionRef.current;
       recognitionRef.current = null;
       try { rec?.stop(); } catch { /* ignore */ }
