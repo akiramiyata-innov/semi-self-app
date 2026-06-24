@@ -258,5 +258,6 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
     };
   }, []);
 
-  return { start, stop, listening, supported: true, error };
+  // manualStop=true → Edge/GST（手動ON/OFF）、false → Chrome（onFinal で自動OFF）
+  return { start, stop, listening, supported: true, error, manualStop: !useWebSpeech };
 }

@@ -125,7 +125,7 @@ export default function StaffPage() {
   }, []);
 
   // ── Speech Recognition ───────────────────────────────────────────────────
-  const { start: startMic, stop: stopMic, listening, error: micError } = useSpeechRecognition({
+  const { start: startMic, stop: stopMic, listening, error: micError, manualStop } = useSpeechRecognition({
     lang: "ja-JP",
     onInterim: (text) => {
       const sid = activeListeningSession.current;
@@ -323,9 +323,10 @@ export default function StaffPage() {
   const toggleMic = useCallback((sessionId: string) => {
     if (activeListeningSession.current === sessionId) {
       // Turn off
-      // activeListeningSession.current は onFinal でクリアする
-      // (Edge/GST では onFinal が非同期で遅れて発火するため、ここで先にクリアすると sid=null になる)
       stopMic();
+      // Chrome(Web Speech API): onFinal は同期的に発火済みか発火しない → 即座にクリア
+      // Edge(Google STT): onFinal が非同期で後から発火するため onFinal 側でクリアする
+      if (!manualStop) activeListeningSession.current = null;
       setActiveListeningId(null);
       micOnRef.current = false;
     } else {
@@ -347,6 +348,8 @@ export default function StaffPage() {
   useEffect(() => { activeSessionsRef.current = activeSessions; }, [activeSessions]);
   const toggleMicRef = useRef(toggleMic);
   useEffect(() => { toggleMicRef.current = toggleMic; }, [toggleMic]);
+  const manualStopRef = useRef(manualStop);
+  useEffect(() => { manualStopRef.current = manualStop; }, [manualStop]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -355,6 +358,8 @@ export default function StaffPage() {
       e.preventDefault();
       const currentSid = activeListeningSession.current;
       if (currentSid) {
+        // Chrome(Web Speech API): マイクON中は Space で OFF にしない（onFinal で自動OFF）
+        if (!manualStopRef.current) return;
         toggleMicRef.current(currentSid);
       } else {
         const firstSid = Array.from(activeSessionsRef.current.keys())[0];
