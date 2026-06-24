@@ -39,7 +39,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ transcript: "", error: json.error.message }, { status: 500 });
   }
 
-  const transcript = json.results?.[0]?.alternatives?.[0]?.transcript ?? "";
+  // 複数 results を結合（長い発話は複数に分割される）
+  const transcript = json.results
+    ?.map((r) => r.alternatives?.[0]?.transcript ?? "")
+    .join("") ?? "";
   console.log(`[STT] 結果: "${transcript}"`);
   return NextResponse.json({ transcript });
 }
