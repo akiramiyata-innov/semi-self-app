@@ -151,8 +151,7 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
 
   // Socket.IO setup
   useEffect(() => {
-    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL ?? "http://localhost:3001";
-    const s = io(socketUrl, { path: "/socket.io", transports: ["websocket", "polling"] });
+    const s = io({ path: "/socket.io", transports: ["websocket", "polling"] });
     socketRef.current = s;
     s.on("connect", () => setConnected(true));
     s.on("disconnect", () => setConnected(false));
