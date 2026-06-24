@@ -92,25 +92,33 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
   }, []);
 
   // ── Google STT: 手動ON/OFF（Push-to-Talk）────────────────────────────────
-  // マイクON → 録音開始、マイクOFF → 録音停止 → STTへ送信 → テキスト表示
-  // ポイント: ストリームは onstop の中で止める（stop()で先に止めると最終データが失われる）
   const startGstManual = useCallback((stream: MediaStream) => {
     const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
       ? "audio/webm;codecs=opus" : "audio/webm";
+
+    console.log(`[D1] startGstManual: mimeType=${mimeType}`);
 
     const chunks: Blob[] = [];
     const recorder = new MediaRecorder(stream, { mimeType });
     gstCurrentRecorderRef.current = recorder;
 
-    // 200ms ごとにデータ取得（timeslice） → onstop時点で必ずchunksにデータが入っている
-    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    recorder.ondataavailable = (e) => {
+      console.log(`[D2] ondataavailable: size=${e.data.size}`);
+      if (e.data.size > 0) chunks.push(e.data);
+    };
     recorder.onstop = async () => {
-      // 最終データが確定してからストリームを閉じる
-      stream.getTracks().forEach((t) => t.stop());
       const blob = new Blob(chunks, { type: mimeType });
-      if (blob.size >= 500) await transcribeBlob(blob);
+      console.log(`[D3] onstop: chunks=${chunks.length}, blob.size=${blob.size}`);
+      stream.getTracks().forEach((t) => t.stop());
+      if (blob.size >= 500) {
+        console.log(`[D4] → transcribeBlob 呼び出し`);
+        await transcribeBlob(blob);
+      } else {
+        console.log(`[D4] → blob小さすぎ、スキップ`);
+      }
     };
     recorder.start(200);
+    console.log(`[D1] recorder.start(200) 完了, state=${recorder.state}`);
   }, [transcribeBlob]);
 
   // ── Web Speech API: core recognition instance ──────────────────────────────
@@ -210,6 +218,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
 
     } else {
       // Edge / other browsers path: Google Cloud STT（手動ON/OFF）
+      console.log(`[D0] Edge path 開始: isEdge=${/Edg\//.test(navigator.userAgent)}`);
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         gstStreamRef.current = stream;
@@ -237,12 +246,13 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
     } else {
       const rec = gstCurrentRecorderRef.current;
       const stream = gstStreamRef.current;
+      console.log(`[D5] stop() GST path: rec.state=${rec?.state}`);
       gstCurrentRecorderRef.current = null;
       gstStreamRef.current = null;
       if (rec?.state !== "inactive") {
-        rec?.stop(); // → ondataavailable → onstop → stream.getTracks().stop() → transcribeBlob
+        rec?.stop();
       } else {
-        // recorder がすでに停止済みの場合はストリームを手動で止める
+        console.log(`[D5] recorder既にinactive → stream手動停止`);
         stream?.getTracks().forEach((t) => t.stop());
       }
     }
