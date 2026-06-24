@@ -53,8 +53,9 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
   const onInterimRef = useRef(onInterim);
   const onFinalRef = useRef(onFinal);
 
-  // Stable flag: Web Speech API availability doesn't change during a session
-  const useWebSpeech = useRef(getSpeechRecognition() !== null).current;
+  // Edge has webkitSpeechRecognition but it fails with network errors — force Google STT
+  const isEdge = typeof navigator !== "undefined" && /Edg\//.test(navigator.userAgent);
+  const useWebSpeech = useRef(getSpeechRecognition() !== null && !isEdge).current;
 
   useEffect(() => { langRef.current = lang; }, [lang]);
   useEffect(() => { onInterimRef.current = onInterim; }, [onInterim]);
