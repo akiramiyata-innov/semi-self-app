@@ -19,56 +19,104 @@ function getSpeechRecognition(): SpeechRecognitionCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
-/**
- * Chrome treats webkitSpeechRecognition and getUserMedia as SEPARATE permissions.
- * Requesting mic via getUserMedia first "warms up" the permission so that
- * webkitSpeechRecognition can reuse it without a separate denied-state.
- */
 async function warmUpMicrophone(): Promise<"ok" | "denied" | "not-found"> {
   if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return "ok";
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    // Release immediately — we only needed the permission grant
     stream.getTracks().forEach((t) => t.stop());
     return "ok";
   } catch (e: unknown) {
     const err = e as DOMException;
     if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") return "denied";
     if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") return "not-found";
-    return "ok"; // other errors — still try speech recognition
+    return "ok";
   }
 }
 
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const dataUrl = reader.result as string;
+      resolve(dataUrl.split(",")[1]);
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
 export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: UseSpeechRecognitionOptions) {
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const [listening, setListening] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   const activeRef = useRef(false);
   const langRef = useRef(lang);
   const onInterimRef = useRef(onInterim);
   const onFinalRef = useRef(onFinal);
-  const [listening, setListening] = useState(false);
-  const [supported] = useState(() => getSpeechRecognition() !== null);
-  const [error, setError] = useState<string | null>(null);
+
+  // Stable flag: Web Speech API availability doesn't change during a session
+  const useWebSpeech = useRef(getSpeechRecognition() !== null).current;
 
   useEffect(() => { langRef.current = lang; }, [lang]);
   useEffect(() => { onInterimRef.current = onInterim; }, [onInterim]);
   useEffect(() => { onFinalRef.current = onFinal; }, [onFinal]);
 
-  // Stored as a ref so onend closures always call the latest version
+  // ── Web Speech API refs ────────────────────────────────────────────────────
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
   const startInternalRef = useRef<() => void>(() => {});
 
-  /**
-   * Creates a brand-new SpeechRecognition instance and starts it.
-   * NEVER reuses a previous instance — avoids Chrome's "already started /
-   * transitional state" errors that cause silent failures.
-   */
+  // ── Google STT refs ────────────────────────────────────────────────────────
+  const gstStreamRef = useRef<MediaStream | null>(null);
+
+  // ── Google STT: transcribe one audio blob ──────────────────────────────────
+  const transcribeBlob = useCallback(async (blob: Blob) => {
+    if (blob.size < 1000) return;
+    try {
+      const base64 = await blobToBase64(blob);
+      const res = await fetch("/api/stt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audio: base64, lang: langRef.current }),
+      });
+      const json = await res.json() as { transcript?: string };
+      if (json.transcript) {
+        onInterimRef.current?.("");
+        onFinalRef.current?.(json.transcript);
+      }
+    } catch (e) {
+      console.error("[GoogleSTT]", e);
+    }
+  }, []);
+
+  // ── Google STT: record CHUNK_MS then transcribe, loop while active ─────────
+  const startGstChunk = useCallback((stream: MediaStream) => {
+    if (!activeRef.current) return;
+
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : "audio/webm";
+
+    const recorder = new MediaRecorder(stream, { mimeType });
+    const chunks: Blob[] = [];
+
+    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    recorder.onstop = async () => {
+      const blob = new Blob(chunks, { type: mimeType });
+      await transcribeBlob(blob);
+      if (activeRef.current) startGstChunk(stream);
+    };
+
+    recorder.start();
+    setTimeout(() => {
+      if (recorder.state !== "inactive") recorder.stop();
+    }, 3000);
+  }, [transcribeBlob]);
+
+  // ── Web Speech API: core recognition instance ──────────────────────────────
   const startInternal = useCallback(() => {
     const SpeechRecognitionAPI = getSpeechRecognition();
     if (!SpeechRecognitionAPI) return;
 
-    // Detach and silently discard the previous recognition without calling abort()
-    // on it — calling abort() on a recently-ended instance can fire spurious events.
     recognitionRef.current = null;
-
     const rec = new SpeechRecognitionAPI();
     rec.continuous = true;
     rec.interimResults = true;
@@ -85,20 +133,12 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
         if (event.results[i].isFinal) { final += t; } else { interim += t; }
       }
       if (interim) onInterimRef.current?.(interim);
-      if (final) {
-        onInterimRef.current?.("");
-        onFinalRef.current?.(final);
-      }
+      if (final) { onInterimRef.current?.(""); onFinalRef.current?.(final); }
     };
 
     rec.onend = () => {
-      // Restart only when:
-      //  • we still intend to be listening (activeRef)
-      //  • this specific instance is still the current one (not superseded by stop/start)
       if (activeRef.current && recognitionRef.current === rec) {
-        setTimeout(() => {
-          if (activeRef.current) startInternalRef.current();
-        }, 200);
+        setTimeout(() => { if (activeRef.current) startInternalRef.current(); }, 200);
       } else if (!activeRef.current) {
         setListening(false);
       }
@@ -106,44 +146,22 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
 
     rec.onerror = (event: SpeechRecognitionErrorEvent) => {
       const err = event.error;
-
       if (err === "not-allowed") {
-        // Permission was explicitly denied (user clicked Block, or Chrome policy)
-        setError(
-          "マイクへのアクセスが拒否されました。\n" +
-          "アドレスバー左端のアイコン →「マイク」→「許可」に変更し、ページをリロードしてください。"
-        );
-        activeRef.current = false;
-        setListening(false);
-
+        setError("マイクへのアクセスが拒否されました。\nアドレスバー左端のアイコン →「マイク」→「許可」に変更し、ページをリロードしてください。");
+        activeRef.current = false; setListening(false);
       } else if (err === "service-not-allowed") {
-        // Speech recognition service is unavailable (HTTP non-localhost, policy, or network)
-        setError(
-          "音声認識サービスを利用できません。\n" +
-          "インターネット接続を確認するか、Chromeのアドレスバー左端のアイコンから「マイク」と「音声」を許可してください。"
-        );
-        activeRef.current = false;
-        setListening(false);
-
+        setError("音声認識サービスを利用できません。\nインターネット接続を確認するか、Chromeのアドレスバー左端のアイコンから「マイク」と「音声」を許可してください。");
+        activeRef.current = false; setListening(false);
       } else if (err === "network") {
-        // Transient network error — recognition will restart via onend
         setError("ネットワークエラー: 音声認識にはインターネット接続が必要です。");
-
       } else if (err === "no-speech") {
-        // Normal timeout (no speech detected in the window) — onend will restart
         setError(null);
-
       } else if (err === "audio-capture") {
         setError("マイクが見つかりません。マイクの接続を確認してください。");
-        activeRef.current = false;
-        setListening(false);
-
+        activeRef.current = false; setListening(false);
       } else if (err === "aborted") {
-        // Deliberate stop — not an error
         setError(null);
-
       } else {
-        // Show raw error code so we can diagnose unknown errors
         setError(`音声認識エラー: ${err}`);
         console.warn("[SpeechRecognition] unhandled error:", err);
       }
@@ -155,70 +173,83 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
       console.error("[SpeechRecognition] start() threw:", e);
       recognitionRef.current = null;
       if (activeRef.current) {
-        // Retry with a fresh instance after a longer pause
         setTimeout(() => { if (activeRef.current) startInternalRef.current(); }, 600);
       } else {
         setListening(false);
       }
     }
-  }, []); // intentionally empty — all mutable values accessed via refs
+  }, []);
 
   useEffect(() => { startInternalRef.current = startInternal; }, [startInternal]);
 
-  /**
-   * Public API: request mic permission via getUserMedia first (warms up the
-   * permission grant so webkitSpeechRecognition sees it as already-allowed),
-   * then start recognition.
-   */
+  // ── Public: start ──────────────────────────────────────────────────────────
   const start = useCallback(async (newLang?: string) => {
     if (newLang) langRef.current = newLang;
     setError(null);
 
-    // Stop any in-progress recognition before requesting getUserMedia
-    // so Chrome doesn't see two simultaneous mic consumers.
-    const prev = recognitionRef.current;
-    recognitionRef.current = null;
-    if (prev) {
-      try { prev.stop(); } catch { /* ignore */ }
-    }
+    if (useWebSpeech) {
+      // Chrome path: warm up getUserMedia then launch Web Speech API
+      const prev = recognitionRef.current;
+      recognitionRef.current = null;
+      if (prev) { try { prev.stop(); } catch { /* ignore */ } }
 
-    // Warm up: request mic via getUserMedia before webkitSpeechRecognition
-    const warmup = await warmUpMicrophone();
-    if (warmup === "denied") {
-      setError(
-        "マイクへのアクセスが拒否されました。\n" +
-        "アドレスバー左端のアイコン →「マイク」→「許可」に変更し、ページをリロードしてください。"
-      );
-      return;
-    }
-    if (warmup === "not-found") {
-      setError("マイクが見つかりません。マイクの接続を確認してください。");
-      return;
-    }
+      const warmup = await warmUpMicrophone();
+      if (warmup === "denied") {
+        setError("マイクへのアクセスが拒否されました。\nアドレスバー左端のアイコン →「マイク」→「許可」に変更し、ページをリロードしてください。");
+        return;
+      }
+      if (warmup === "not-found") {
+        setError("マイクが見つかりません。マイクの接続を確認してください。");
+        return;
+      }
+      activeRef.current = true;
+      setListening(true);
+      setTimeout(() => { if (activeRef.current) startInternalRef.current(); }, 100);
 
-    activeRef.current = true;
-    setListening(true);
-    // Small pause so Chrome finishes releasing the getUserMedia stream
-    setTimeout(() => { if (activeRef.current) startInternalRef.current(); }, 100);
-  }, []); // intentionally empty — all mutable values accessed via refs or startInternalRef
+    } else {
+      // Edge / other browsers path: Google Cloud STT via MediaRecorder
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        gstStreamRef.current = stream;
+        activeRef.current = true;
+        setListening(true);
+        startGstChunk(stream);
+      } catch (e) {
+        const err = e as DOMException;
+        setError(
+          err.name === "NotAllowedError"
+            ? "マイクへのアクセスが拒否されました。ブラウザの設定でマイクを許可してください。"
+            : "マイクへのアクセスに失敗しました。"
+        );
+      }
+    }
+  }, [useWebSpeech, startGstChunk]);
 
+  // ── Public: stop ───────────────────────────────────────────────────────────
   const stop = useCallback(() => {
     activeRef.current = false;
-    const rec = recognitionRef.current;
-    recognitionRef.current = null;
-    try { rec?.stop(); } catch { /* ignore */ }
+    if (useWebSpeech) {
+      const rec = recognitionRef.current;
+      recognitionRef.current = null;
+      try { rec?.stop(); } catch { /* ignore */ }
+    } else {
+      gstStreamRef.current?.getTracks().forEach((t) => t.stop());
+      gstStreamRef.current = null;
+    }
     setListening(false);
     setError(null);
-  }, []);
+  }, [useWebSpeech]);
 
+  // ── Cleanup on unmount ─────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
       activeRef.current = false;
       const rec = recognitionRef.current;
       recognitionRef.current = null;
       try { rec?.stop(); } catch { /* ignore */ }
+      gstStreamRef.current?.getTracks().forEach((t) => t.stop());
     };
   }, []);
 
-  return { start, stop, listening, supported, error };
+  return { start, stop, listening, supported: true, error };
 }
