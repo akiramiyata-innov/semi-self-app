@@ -69,6 +69,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
   const gstStreamRef = useRef<MediaStream | null>(null);
   const gstAudioContextRef = useRef<AudioContext | null>(null);
   const gstAnimFrameRef = useRef<number>(0);
+  const gstCurrentRecorderRef = useRef<MediaRecorder | null>(null);
 
   // ── Google STT: transcribe one audio blob ──────────────────────────────────
   const transcribeBlob = useCallback(async (blob: Blob) => {
@@ -90,16 +91,16 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
     }
   }, []);
 
-  // ── Google STT: VAD（音声検知型）録音 ──────────────────────────────────────
-  // 話し始めたら録音開始 → 無音800ms続いたら停止してSTTへ送信
+  // ── Google STT: VAD（常時録音→無音で区切る方式）──────────────────────────
+  // 録音は常時継続し、無音が続いたら区切ってSTTへ送信→即座に次の録音開始
+  // → 発話の最初が欠けない
   const startGstWithVAD = useCallback((stream: MediaStream) => {
-    const SPEECH_THRESHOLD = 15; // RMS閾値（0〜128、これ以上で発話判定）
-    const SILENCE_DURATION = 800; // 無音がこのms続いたら発話終了と判定
-    const MIN_SPEECH_MS = 200; // これより短い録音は送信しない
+    const SPEECH_THRESHOLD = 15;  // RMS閾値（0〜128）
+    const SILENCE_DURATION = 800; // 無音がこのms続いたら発話終了
+    const MAX_SPEECH_MS = 12000;  // 最長録音（長すぎる場合に強制区切り）
 
     const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-      ? "audio/webm;codecs=opus"
-      : "audio/webm";
+      ? "audio/webm;codecs=opus" : "audio/webm";
 
     const audioContext = new AudioContext();
     gstAudioContextRef.current = audioContext;
@@ -108,33 +109,52 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
     audioContext.createMediaStreamSource(stream).connect(analyser);
     const dataArray = new Uint8Array(analyser.fftSize);
 
-    let recorder: MediaRecorder | null = null;
-    let chunks: Blob[] = [];
+    type Rec = { recorder: MediaRecorder; chunks: Blob[]; hasSpeech: boolean };
+    let current: Rec | null = null;
     let isSpeaking = false;
     let silenceTimer: ReturnType<typeof setTimeout> | null = null;
     let speechStartTime = 0;
 
+    // 録音開始（常時録音）
     const startRec = () => {
-      if (recorder && recorder.state !== "inactive") return;
-      chunks = [];
-      recorder = new MediaRecorder(stream, { mimeType });
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-      recorder.onstop = async () => {
-        if (Date.now() - speechStartTime >= MIN_SPEECH_MS) {
-          await transcribeBlob(new Blob(chunks, { type: mimeType }));
-        }
-        recorder = null;
+      const state: Rec = {
+        recorder: new MediaRecorder(stream, { mimeType }),
+        chunks: [],
+        hasSpeech: false,
       };
-      recorder.start();
-      speechStartTime = Date.now();
+      current = state;
+      gstCurrentRecorderRef.current = state.recorder;
+
+      state.recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) state.chunks.push(e.data);
+      };
+      state.recorder.onstop = async () => {
+        // 発話あり かつ 十分なサイズの場合のみ送信
+        if (state.hasSpeech && state.chunks.length > 0) {
+          const blob = new Blob(state.chunks, { type: mimeType });
+          if (blob.size >= 500) await transcribeBlob(blob);
+        }
+      };
+      state.recorder.start();
     };
 
-    const stopRec = () => {
-      if (recorder && recorder.state !== "inactive") recorder.stop();
+    // 現在の録音を停止し、即座に次の録音を開始（発話の頭を取りこぼさない）
+    const rotatRec = () => {
+      const old = current;
+      startRec(); // 先に新しい録音を開始
+      if (old?.recorder.state !== "inactive") old?.recorder.stop();
     };
+
+    // 最初の録音を開始（マイクON直後から録音済み→次の発話頭を取りこぼさない）
+    startRec();
 
     const loop = () => {
-      if (!activeRef.current) { stopRec(); audioContext.close(); return; }
+      if (!activeRef.current) {
+        if (silenceTimer) clearTimeout(silenceTimer);
+        if (current?.recorder.state !== "inactive") current?.recorder.stop();
+        audioContext.close();
+        return;
+      }
 
       analyser.getByteTimeDomainData(dataArray);
       const rms = Math.sqrt(
@@ -144,17 +164,23 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
       if (rms > SPEECH_THRESHOLD) {
         if (!isSpeaking) {
           isSpeaking = true;
+          speechStartTime = Date.now();
+          if (current) current.hasSpeech = true;
           if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
-          startRec();
         }
-      } else {
-        if (isSpeaking && !silenceTimer) {
-          silenceTimer = setTimeout(() => {
-            isSpeaking = false;
-            silenceTimer = null;
-            stopRec();
-          }, SILENCE_DURATION);
+        // 長すぎる発話は強制区切り
+        if (isSpeaking && Date.now() - speechStartTime > MAX_SPEECH_MS) {
+          rotatRec();
+          if (current) current.hasSpeech = true;
+          speechStartTime = Date.now();
         }
+      } else if (isSpeaking && !silenceTimer) {
+        // 無音検知 → タイマー開始
+        silenceTimer = setTimeout(() => {
+          isSpeaking = false;
+          silenceTimer = null;
+          rotatRec(); // 録音を区切り → 送信 → 次の録音開始
+        }, SILENCE_DURATION);
       }
 
       gstAnimFrameRef.current = requestAnimationFrame(loop);
@@ -286,6 +312,10 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
       try { rec?.stop(); } catch { /* ignore */ }
     } else {
       cancelAnimationFrame(gstAnimFrameRef.current);
+      if (gstCurrentRecorderRef.current?.state !== "inactive") {
+        gstCurrentRecorderRef.current?.stop();
+      }
+      gstCurrentRecorderRef.current = null;
       gstAudioContextRef.current?.close();
       gstAudioContextRef.current = null;
       gstStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -300,6 +330,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
     return () => {
       activeRef.current = false;
       cancelAnimationFrame(gstAnimFrameRef.current);
+      gstCurrentRecorderRef.current?.stop();
       gstAudioContextRef.current?.close();
       const rec = recognitionRef.current;
       recognitionRef.current = null;
