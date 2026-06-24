@@ -70,15 +70,18 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
 
   // ── Google STT: transcribe one audio blob ──────────────────────────────────
   const transcribeBlob = useCallback(async (blob: Blob) => {
-    if (blob.size < 1000) return;
+    console.log(`[GoogleSTT] blob size=${blob.size} type=${blob.type}`);
+    if (blob.size < 500) { console.warn("[GoogleSTT] blob too small, skip"); return; }
     try {
       const base64 = await blobToBase64(blob);
+      console.log(`[GoogleSTT] base64 length=${base64.length} lang=${langRef.current}`);
       const res = await fetch("/api/stt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ audio: base64, lang: langRef.current }),
       });
-      const json = await res.json() as { transcript?: string };
+      const json = await res.json() as { transcript?: string; error?: string };
+      console.log("[GoogleSTT] response:", json);
       if (json.transcript) {
         onInterimRef.current?.("");
         onFinalRef.current?.(json.transcript);
