@@ -91,102 +91,23 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
     }
   }, []);
 
-  // ── Google STT: VAD（常時録音→無音で区切る方式）──────────────────────────
-  // 録音は常時継続し、無音が続いたら区切ってSTTへ送信→即座に次の録音開始
-  // → 発話の最初が欠けない
-  const startGstWithVAD = useCallback((stream: MediaStream) => {
-    const SPEECH_THRESHOLD = 15;  // RMS閾値（0〜128）
-    const SILENCE_DURATION = 800; // 無音がこのms続いたら発話終了
-    const MAX_SPEECH_MS = 12000;  // 最長録音（長すぎる場合に強制区切り）
-
+  // ── Google STT: 手動ON/OFF（Push-to-Talk）────────────────────────────────
+  // マイクON → 録音開始、マイクOFF → 録音停止 → STTへ送信 → テキスト表示
+  // VAD（自動音声検知）は使用しない → 途中で切れない
+  const startGstManual = useCallback((stream: MediaStream) => {
     const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
       ? "audio/webm;codecs=opus" : "audio/webm";
 
-    const audioContext = new AudioContext();
-    gstAudioContextRef.current = audioContext;
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 256;
-    audioContext.createMediaStreamSource(stream).connect(analyser);
-    const dataArray = new Uint8Array(analyser.fftSize);
+    const chunks: Blob[] = [];
+    const recorder = new MediaRecorder(stream, { mimeType });
+    gstCurrentRecorderRef.current = recorder;
 
-    type Rec = { recorder: MediaRecorder; chunks: Blob[]; hasSpeech: boolean };
-    let current: Rec | null = null;
-    let isSpeaking = false;
-    let silenceTimer: ReturnType<typeof setTimeout> | null = null;
-    let speechStartTime = 0;
-
-    // 録音開始（常時録音）
-    const startRec = () => {
-      const state: Rec = {
-        recorder: new MediaRecorder(stream, { mimeType }),
-        chunks: [],
-        hasSpeech: false,
-      };
-      current = state;
-      gstCurrentRecorderRef.current = state.recorder;
-
-      state.recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) state.chunks.push(e.data);
-      };
-      state.recorder.onstop = async () => {
-        // 発話あり かつ 十分なサイズの場合のみ送信
-        if (state.hasSpeech && state.chunks.length > 0) {
-          const blob = new Blob(state.chunks, { type: mimeType });
-          if (blob.size >= 500) await transcribeBlob(blob);
-        }
-      };
-      state.recorder.start();
+    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    recorder.onstop = async () => {
+      const blob = new Blob(chunks, { type: mimeType });
+      if (blob.size >= 500) await transcribeBlob(blob);
     };
-
-    // 現在の録音を停止し、即座に次の録音を開始（発話の頭を取りこぼさない）
-    const rotatRec = () => {
-      const old = current;
-      startRec(); // 先に新しい録音を開始
-      if (old?.recorder.state !== "inactive") old?.recorder.stop();
-    };
-
-    // 最初の録音を開始（マイクON直後から録音済み→次の発話頭を取りこぼさない）
-    startRec();
-
-    const loop = () => {
-      if (!activeRef.current) {
-        if (silenceTimer) clearTimeout(silenceTimer);
-        if (current?.recorder.state !== "inactive") current?.recorder.stop();
-        audioContext.close();
-        return;
-      }
-
-      analyser.getByteTimeDomainData(dataArray);
-      const rms = Math.sqrt(
-        dataArray.reduce((sum, v) => sum + Math.pow(v - 128, 2), 0) / dataArray.length
-      );
-
-      if (rms > SPEECH_THRESHOLD) {
-        if (!isSpeaking) {
-          isSpeaking = true;
-          speechStartTime = Date.now();
-          if (current) current.hasSpeech = true;
-          if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
-        }
-        // 長すぎる発話は強制区切り
-        if (isSpeaking && Date.now() - speechStartTime > MAX_SPEECH_MS) {
-          rotatRec();
-          if (current) current.hasSpeech = true;
-          speechStartTime = Date.now();
-        }
-      } else if (isSpeaking && !silenceTimer) {
-        // 無音検知 → タイマー開始
-        silenceTimer = setTimeout(() => {
-          isSpeaking = false;
-          silenceTimer = null;
-          rotatRec(); // 録音を区切り → 送信 → 次の録音開始
-        }, SILENCE_DURATION);
-      }
-
-      gstAnimFrameRef.current = requestAnimationFrame(loop);
-    };
-
-    gstAnimFrameRef.current = requestAnimationFrame(loop);
+    recorder.start();
   }, [transcribeBlob]);
 
   // ── Web Speech API: core recognition instance ──────────────────────────────
@@ -285,13 +206,13 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
       setTimeout(() => { if (activeRef.current) startInternalRef.current(); }, 100);
 
     } else {
-      // Edge / other browsers path: Google Cloud STT via VAD
+      // Edge / other browsers path: Google Cloud STT（手動ON/OFF）
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         gstStreamRef.current = stream;
         activeRef.current = true;
         setListening(true);
-        startGstWithVAD(stream);
+        startGstManual(stream);
       } catch (e) {
         const err = e as DOMException;
         setError(
@@ -301,7 +222,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
         );
       }
     }
-  }, [useWebSpeech, startGstWithVAD]);
+  }, [useWebSpeech, startGstManual]);
 
   // ── Public: stop ───────────────────────────────────────────────────────────
   const stop = useCallback(() => {
@@ -311,13 +232,10 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
       recognitionRef.current = null;
       try { rec?.stop(); } catch { /* ignore */ }
     } else {
-      cancelAnimationFrame(gstAnimFrameRef.current);
       if (gstCurrentRecorderRef.current?.state !== "inactive") {
-        gstCurrentRecorderRef.current?.stop();
+        gstCurrentRecorderRef.current?.stop(); // onstop → transcribeBlob
       }
       gstCurrentRecorderRef.current = null;
-      gstAudioContextRef.current?.close();
-      gstAudioContextRef.current = null;
       gstStreamRef.current?.getTracks().forEach((t) => t.stop());
       gstStreamRef.current = null;
     }
@@ -329,9 +247,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal }: Use
   useEffect(() => {
     return () => {
       activeRef.current = false;
-      cancelAnimationFrame(gstAnimFrameRef.current);
       gstCurrentRecorderRef.current?.stop();
-      gstAudioContextRef.current?.close();
       const rec = recognitionRef.current;
       recognitionRef.current = null;
       try { rec?.stop(); } catch { /* ignore */ }
