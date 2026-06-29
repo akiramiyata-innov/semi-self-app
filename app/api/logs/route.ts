@@ -2,10 +2,21 @@ import fs from "fs";
 import path from "path";
 import { NextResponse } from "next/server";
 import type { SessionLog, SessionSummary } from "@/lib/types";
+import { isGCSEnabled, listLogs } from "@/lib/gcsClient";
 
 const LOGS_DIR = path.join(process.cwd(), "logs");
 
 export async function GET() {
+  if (isGCSEnabled()) {
+    try {
+      const sessions = await listLogs();
+      return NextResponse.json({ sessions });
+    } catch (e) {
+      console.error("[logs API] GCS error:", e);
+      return NextResponse.json({ sessions: [] });
+    }
+  }
+
   try {
     await fs.promises.access(LOGS_DIR);
   } catch {

@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { NextRequest, NextResponse } from "next/server";
+import { isGCSEnabled, getLog } from "@/lib/gcsClient";
 
 const LOGS_DIR = path.join(process.cwd(), "logs");
 
@@ -11,6 +12,16 @@ export async function GET(
   const { sessionId } = await params;
   if (!sessionId || sessionId.includes("..") || sessionId.includes("/")) {
     return NextResponse.json({ error: "invalid sessionId" }, { status: 400 });
+  }
+
+  if (isGCSEnabled()) {
+    try {
+      const log = await getLog(sessionId);
+      if (log) return NextResponse.json(log);
+    } catch (e) {
+      console.error("[logs API] GCS error:", e);
+    }
+    return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
   try {

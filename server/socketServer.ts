@@ -7,6 +7,7 @@ import { getCached, setCache } from "../lib/translateCache";
 import { getLang, getGoogleTranslateLangCode } from "../lib/languages";
 import type { LangCode, StaffStatus } from "../lib/socketEvents";
 import type { TranscriptEntry, SessionLog } from "../lib/types";
+import { isGCSEnabled, uploadLog } from "../lib/gcsClient";
 
 function getApiKey(): string {
   return process.env.GOOGLE_API_KEY || "";
@@ -68,6 +69,17 @@ async function saveSessionLog(session: ActiveSession): Promise<void> {
     transcript: session.transcript,
   };
   const date = new Date(endedAt).toISOString().slice(0, 10);
+
+  if (isGCSEnabled()) {
+    try {
+      await uploadLog(date, session.sessionId, log);
+      console.log(`[log] saved to GCS: logs/${date}/${session.sessionId}.json (${session.transcript.length} entries)`);
+    } catch (e) {
+      console.error("[log] failed to save to GCS:", e);
+    }
+    return;
+  }
+
   const dir = path.join(process.cwd(), "logs", date);
   try {
     await fs.promises.mkdir(dir, { recursive: true });
