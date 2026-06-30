@@ -83,11 +83,17 @@ export default function StaffPage() {
   const [staffList, setStaffList] = useState<StaffInfo[]>([]);
   const [showStaffList, setShowStaffList] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [sessionInfo, setSessionInfo] = useState<{ name: string; email: string; isAdmin: boolean } | null>(null);
 
   const addToast = useCallback((message: string, type: ToastItem["type"] = "info") => {
     const id = Date.now().toString();
     setToasts((prev) => [...prev, { id, message, type }]);
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.href = "/staff/login";
   }, []);
 
   // Check sessionStorage for saved name on mount (per-tab, not shared across tabs)
@@ -97,6 +103,15 @@ export default function StaffPage() {
       staffNameRef.current = saved;
       setStaffName(saved);
     }
+    fetch("/api/auth/me")
+      .then((r) => r.json())
+      .then((info) => {
+        if (info) {
+          setSessionInfo(info);
+          if (!saved && info.name) setNameInput(info.name);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const submitName = useCallback(() => {
@@ -556,6 +571,20 @@ export default function StaffPage() {
               <ClipboardList size={13} />
               通話ログ
             </Link>
+            {sessionInfo?.isAdmin && (
+              <Link
+                href="/admin/staff"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium rounded-lg transition-colors"
+              >
+                スタッフ管理
+              </Link>
+            )}
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-red-500 hover:bg-red-50 text-xs font-medium rounded-lg transition-colors"
+            >
+              ログアウト
+            </button>
             {connected ? (
               <span className="flex items-center gap-1.5 text-green-600 text-sm">
                 <Wifi size={14} /> 接続中
