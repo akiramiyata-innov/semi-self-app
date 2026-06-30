@@ -572,12 +572,20 @@ export default function StaffPage() {
               通話ログ
             </Link>
             {sessionInfo?.isAdmin && (
-              <Link
-                href="/admin/staff"
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium rounded-lg transition-colors"
-              >
-                スタッフ管理
-              </Link>
+              <>
+                <Link
+                  href="/admin/staff"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium rounded-lg transition-colors"
+                >
+                  スタッフ管理
+                </Link>
+                <Link
+                  href="/admin/glossary"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium rounded-lg transition-colors"
+                >
+                  用語集管理
+                </Link>
+              </>
             )}
             <button
               onClick={handleLogout}

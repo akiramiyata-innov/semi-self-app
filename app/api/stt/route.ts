@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getGlossaryTerms } from "@/lib/glossaryClient";
 
 export async function POST(req: NextRequest) {
   const { audio, lang } = await req.json() as { audio: string; lang: string };
@@ -8,6 +9,9 @@ export async function POST(req: NextRequest) {
     console.error("[STT] GOOGLE_API_KEY が未設定");
     return NextResponse.json({ transcript: "" }, { status: 500 });
   }
+
+  const terms = await getGlossaryTerms();
+  const phrases = terms.map((t) => t.ja).filter(Boolean);
 
   const res = await fetch(
     `https://speech.googleapis.com/v1/speech:recognize?key=${apiKey}`,
@@ -19,6 +23,9 @@ export async function POST(req: NextRequest) {
           encoding: "WEBM_OPUS",
           languageCode: lang || "ja-JP",
           enableAutomaticPunctuation: true,
+          ...(phrases.length > 0 && {
+            speechContexts: [{ phrases, boost: 15 }],
+          }),
         },
         audio: { content: audio },
       }),

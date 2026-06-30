@@ -1,3 +1,14 @@
+export interface GlossaryTerm {
+  id: string;
+  ja: string;
+  en?: string;
+  zh?: string;
+  ko?: string;
+  fr?: string;
+  es?: string;
+  th?: string;
+}
+
 export interface TranscriptEntry {
   id: string;
   speaker: "user" | "staff";

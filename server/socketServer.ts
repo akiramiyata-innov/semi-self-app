@@ -8,6 +8,8 @@ import { getLang, getGoogleTranslateLangCode } from "../lib/languages";
 import type { LangCode, StaffStatus } from "../lib/socketEvents";
 import type { TranscriptEntry, SessionLog } from "../lib/types";
 import { isGCSEnabled, uploadLog } from "../lib/gcsClient";
+import { getGlossaryTerms } from "../lib/glossaryClient";
+import type { GlossaryTerm } from "../lib/types";
 
 function getApiKey(): string {
   return process.env.GOOGLE_API_KEY || "";
@@ -136,6 +138,28 @@ async function translateText(text: string, from: string, to: string): Promise<st
     console.error(`[translate] fetch error [${from}→${to}]:`, e);
     return text;
   }
+}
+
+async function translateWithGlossary(text: string, from: string, to: string): Promise<string> {
+  const terms = await getGlossaryTerms();
+  const replacements: Array<{ placeholder: string; target: string }> = [];
+  let processed = text;
+
+  terms.forEach((term: GlossaryTerm, i: number) => {
+    const src = (from === "ja" ? term.ja : term[from as keyof GlossaryTerm]) as string | undefined;
+    const tgt = (to === "ja" ? term.ja : term[to as keyof GlossaryTerm]) as string | undefined;
+    if (src && tgt && processed.includes(src)) {
+      const placeholder = `GLOSS${i}TERM`;
+      processed = processed.split(src).join(placeholder);
+      replacements.push({ placeholder, target: tgt });
+    }
+  });
+
+  let result = await translateText(processed, from, to);
+  replacements.forEach(({ placeholder, target }) => {
+    result = result.split(placeholder).join(target);
+  });
+  return result;
 }
 
 async function synthesizeSpeech(text: string, langCode: LangCode): Promise<string> {
@@ -329,7 +353,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         let translatedText: string | undefined;
         if (isFinal && lang !== "ja") {
           const fromCode = getGoogleTranslateLangCode(lang);
-          translatedText = await translateText(text, fromCode, "ja");
+          translatedText = await translateWithGlossary(text, fromCode, "ja");
         }
 
         if (isFinal) {
@@ -371,7 +395,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
         if (userLang !== "ja") {
           const toCode = getGoogleTranslateLangCode(userLang);
-          translatedText = await translateText(text, "ja", toCode);
+          translatedText = await translateWithGlossary(text, "ja", toCode);
           audioBase64 = await synthesizeSpeech(translatedText, userLang);
         } else {
           translatedText = text;
