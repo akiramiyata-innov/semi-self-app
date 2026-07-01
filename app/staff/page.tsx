@@ -114,6 +114,23 @@ export default function StaffPage() {
       .catch(() => {});
   }, []);
 
+  // S5: periodic session expiry check (every 5 minutes)
+  useEffect(() => {
+    const checkSession = async () => {
+      try {
+        const res = await fetch("/api/auth/me");
+        if (res.status === 401) {
+          addToast("セッションが切れました。再ログインしてください。", "error");
+          setTimeout(() => { window.location.href = "/staff/login"; }, 3000);
+        }
+      } catch {
+        // network error — ignore, don't log out on transient failure
+      }
+    };
+    const timer = setInterval(checkSession, 5 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [addToast]);
+
   const submitName = useCallback(() => {
     const name = nameInput.trim();
     if (!name) return;
@@ -225,6 +242,19 @@ export default function StaffPage() {
 
     s.on("call:alreadyTaken", () => {
       addToast("別のスタッフが先に応答しました", "warning");
+    });
+
+    // S1: user's connection dropped unexpectedly
+    s.on("call:userDisconnected", (payload: { sessionId: string; machineName: string }) => {
+      addToast(`${payload.machineName}のユーザーとの接続が切れました`, "error");
+    });
+
+    // S4: translation failed
+    s.on("error:translation", (payload: { sessionId: string; direction: string }) => {
+      const msg = payload.direction === "jaToUser"
+        ? "翻訳に失敗しました。お客様へのメッセージが原文（日本語）で送信されました。"
+        : "翻訳に失敗しました。お客様のメッセージを翻訳できませんでした。";
+      addToast(msg, "error");
     });
 
     s.on("call:incoming", (payload: IncomingCall) => {

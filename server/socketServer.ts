@@ -118,26 +118,21 @@ async function translateText(text: string, from: string, to: string): Promise<st
     return text;
   }
 
-  try {
-    const url = `https://translation.googleapis.com/language/translate/v2?key=${apiKey}`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ q: text, source: from, target: to, format: "text" }),
-    });
-    const json = await res.json() as { data?: { translations?: Array<{ translatedText: string }> }; error?: { message: string } };
-    if (json.error) {
-      console.error(`[translate] API error [${from}→${to}]: ${json.error.message}`);
-      return text;
-    }
-    const translated = json.data?.translations?.[0]?.translatedText ?? text;
-    console.log(`[translate] "${text}" → "${translated}" [${from}→${to}]`);
-    setCache(text, from, to, translated);
-    return translated;
-  } catch (e) {
-    console.error(`[translate] fetch error [${from}→${to}]:`, e);
-    return text;
+  const url = `https://translation.googleapis.com/language/translate/v2?key=${apiKey}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ q: text, source: from, target: to, format: "text" }),
+  });
+  const json = await res.json() as { data?: { translations?: Array<{ translatedText: string }> }; error?: { message: string } };
+  if (json.error) {
+    console.error(`[translate] API error [${from}→${to}]: ${json.error.message}`);
+    throw new Error(`Translation API error: ${json.error.message}`);
   }
+  const translated = json.data?.translations?.[0]?.translatedText ?? text;
+  console.log(`[translate] "${text}" → "${translated}" [${from}→${to}]`);
+  setCache(text, from, to, translated);
+  return translated;
 }
 
 async function translateWithGlossary(text: string, from: string, to: string): Promise<string> {
@@ -256,6 +251,13 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
     // ── User requests a call ──────────────────────────────────────────────────
     socket.on("call:request", (payload: { machineId: string; machineName: string; userLang?: LangCode }) => {
+      // No responsive staff (none connected or all set to away)
+      const hasResponsiveStaff = Array.from(staffMap.values()).some((s) => s.status !== "away");
+      if (!hasResponsiveStaff) {
+        socket.emit("call:noStaff");
+        return;
+      }
+
       const sessionId = generateSessionId();
       const record: CallRecord = {
         sessionId,
@@ -353,7 +355,12 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         let translatedText: string | undefined;
         if (isFinal && lang !== "ja") {
           const fromCode = getGoogleTranslateLangCode(lang);
-          translatedText = await translateWithGlossary(text, fromCode, "ja");
+          try {
+            translatedText = await translateWithGlossary(text, fromCode, "ja");
+          } catch (e) {
+            console.error("[speech:user] translation error:", e);
+            io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "userToJa" });
+          }
         }
 
         if (isFinal) {
@@ -395,8 +402,14 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
         if (userLang !== "ja") {
           const toCode = getGoogleTranslateLangCode(userLang);
-          translatedText = await translateWithGlossary(text, "ja", toCode);
-          audioBase64 = await synthesizeSpeech(translatedText, userLang);
+          try {
+            translatedText = await translateWithGlossary(text, "ja", toCode);
+          } catch (e) {
+            console.error("[speech:staff] translation error:", e);
+            io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "jaToUser" });
+            translatedText = text; // fallback: send Japanese text as-is
+          }
+          audioBase64 = await synthesizeSpeech(translatedText!, userLang);
         } else {
           translatedText = text;
           audioBase64 = await synthesizeSpeech(text, "ja");
@@ -456,6 +469,11 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
           // If user disconnected, free the staff member
           if (session.userSocketId === socket.id) {
+            // Notify staff that the user's connection dropped (not a normal end)
+            io.to(session.staffSocketId).emit("call:userDisconnected", {
+              sessionId,
+              machineName: session.machineName,
+            });
             releaseSession(sessionId, session.staffSocketId);
           }
 

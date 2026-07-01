@@ -11,7 +11,18 @@ import { useScreenCapture } from "@/hooks/useScreenCapture";
 import type { TranscriptEntry } from "@/lib/types";
 import type { LangCode } from "@/lib/socketEvents";
 
-type Phase = "lang-select" | "idle" | "calling" | "in-call" | "ended" | "rejected";
+type Phase = "lang-select" | "idle" | "calling" | "in-call" | "ended" | "rejected" | "no-staff" | "disconnected";
+
+// Error messages per language (U1/U2/U3)
+const ERR: Record<string, { noStaff: string; noStaffSub: string; disconnected: string; disconnectedSub: string; serverDown: string }> = {
+  ja: { noStaff: "係員が不在です", noStaffSub: "しばらく後にもう一度お試しください。", disconnected: "接続が切れました", disconnectedSub: "ネットワークを確認して、もう一度お試しください。", serverDown: "サーバーに接続できません。ネットワークをご確認ください。" },
+  en: { noStaff: "No staff available", noStaffSub: "Please try again later.", disconnected: "Connection lost", disconnectedSub: "Please check your network and try again.", serverDown: "Cannot connect to server. Please check your network." },
+  zh: { noStaff: "暂无工作人员", noStaffSub: "请稍后再试。", disconnected: "连接中断", disconnectedSub: "请检查网络并重试。", serverDown: "无法连接到服务器，请检查网络。" },
+  ko: { noStaff: "담당자 부재 중", noStaffSub: "잠시 후 다시 시도해 주세요.", disconnected: "연결이 끊어졌습니다", disconnectedSub: "네트워크를 확인하고 다시 시도하세요.", serverDown: "서버에 연결할 수 없습니다. 네트워크를 확인하세요." },
+  fr: { noStaff: "Aucun agent disponible", noStaffSub: "Veuillez réessayer plus tard.", disconnected: "Connexion perdue", disconnectedSub: "Vérifiez votre réseau et réessayez.", serverDown: "Impossible de se connecter au serveur." },
+  es: { noStaff: "Sin personal disponible", noStaffSub: "Por favor, inténtelo más tarde.", disconnected: "Conexión perdida", disconnectedSub: "Verifique su red e inténtelo de nuevo.", serverDown: "No se puede conectar al servidor." },
+  th: { noStaff: "ไม่มีเจ้าหน้าที่", noStaffSub: "กรุณาลองใหม่ภายหลัง", disconnected: "การเชื่อมต่อขาดหาย", disconnectedSub: "กรุณาตรวจสอบเครือข่ายและลองใหม่", serverDown: "ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้" },
+};
 
 let entryCounter = 0;
 function makeId() { return `e-${Date.now()}-${entryCounter++}`; }
@@ -41,6 +52,8 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
 
   const [staffScreenFrame, setStaffScreenFrame] = useState<string | null>(null);
   const [inputText, setInputText] = useState("");
+  const [showConnectWarning, setShowConnectWarning] = useState(false);
+  const connectWarningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const sessionIdRef = useRef<string | null>(null);
   const userLangRef = useRef<LangCode>("ja");
@@ -149,17 +162,42 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [phase, toggleMic]);
 
+  // U1: show connection warning after 8s of no connection
+  useEffect(() => {
+    if (!connected) {
+      connectWarningTimerRef.current = setTimeout(() => setShowConnectWarning(true), 8000);
+    } else {
+      if (connectWarningTimerRef.current) clearTimeout(connectWarningTimerRef.current);
+      setShowConnectWarning(false);
+    }
+    return () => { if (connectWarningTimerRef.current) clearTimeout(connectWarningTimerRef.current); };
+  }, [connected]);
+
   // Socket.IO setup
   useEffect(() => {
     const s = io({ path: "/socket.io", transports: ["websocket", "polling"] });
     socketRef.current = s;
-    s.on("connect", () => setConnected(true));
-    s.on("disconnect", () => setConnected(false));
+    s.on("connect", () => {
+      setConnected(true);
+      // After reconnect, any ongoing session is gone on the server — go back to idle
+      setPhase((prev) => (prev === "in-call" || prev === "calling" || prev === "disconnected") ? "idle" : prev);
+    });
+    s.on("disconnect", () => {
+      setConnected(false);
+      // Show disconnect screen if currently in a call or waiting
+      setPhase((prev) => (prev === "in-call" || prev === "calling") ? "disconnected" : prev);
+    });
 
     s.on("call:answered", (payload: { sessionId: string }) => {
       sessionIdRef.current = payload.sessionId;
       setSessionId(payload.sessionId);
       setPhase("in-call");
+    });
+
+    s.on("call:noStaff", () => {
+      // U2: no responsive staff at all
+      setPhase("no-staff");
+      setTimeout(() => setPhase("idle"), 5000);
     });
 
     s.on("call:rejected", () => {
@@ -254,6 +292,38 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
     });
   }, [inputText, addEntry]);
 
+  const errMsg = ERR[userLang] ?? ERR.ja;
+
+  // --- No Staff ---
+  if (phase === "no-staff") {
+    return (
+      <div className="min-h-screen bg-blue-900 flex flex-col items-center justify-center gap-6 p-8">
+        <div className="w-24 h-24 rounded-full bg-orange-500/20 flex items-center justify-center">
+          <span className="text-5xl">🔔</span>
+        </div>
+        <p className="text-white text-2xl font-bold text-center">{errMsg.noStaff}</p>
+        <p className="text-blue-300 text-base text-center">{errMsg.noStaffSub}</p>
+      </div>
+    );
+  }
+
+  // --- Disconnected ---
+  if (phase === "disconnected") {
+    return (
+      <div className="min-h-screen bg-blue-900 flex flex-col items-center justify-center gap-6 p-8">
+        <div className="w-24 h-24 rounded-full bg-red-500/20 flex items-center justify-center">
+          <span className="text-5xl">📡</span>
+        </div>
+        <p className="text-white text-2xl font-bold text-center">{errMsg.disconnected}</p>
+        <p className="text-blue-300 text-base text-center">{errMsg.disconnectedSub}</p>
+        <div className="flex items-center gap-2 text-blue-400 text-sm">
+          <span className="inline-block w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+          再接続中...
+        </div>
+      </div>
+    );
+  }
+
   // --- Lang Select ---
   if (phase === "lang-select") {
     return (
@@ -282,11 +352,17 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
   if (phase === "idle") {
     return (
       <div className="min-h-screen bg-gradient-to-b from-blue-800 to-blue-900 flex flex-col items-center justify-center p-8">
+        {/* U1: connection warning banner */}
+        {showConnectWarning && (
+          <div className="fixed top-0 left-0 right-0 bg-red-600 text-white text-center py-3 px-4 text-sm font-medium z-50">
+            ⚠ {errMsg.serverDown}
+          </div>
+        )}
         <div className="text-center mb-8">
           <h1 className="text-xl font-bold text-white mb-1">{machineName}</h1>
           <p className="text-blue-300 text-sm flex items-center justify-center gap-2">
             {connected ? "接続中" : "接続待機中..."}
-            <span className={`inline-block w-2 h-2 rounded-full ${connected ? "bg-green-400" : "bg-gray-400"}`} />
+            <span className={`inline-block w-2 h-2 rounded-full ${connected ? "bg-green-400" : "bg-gray-400 animate-pulse"}`} />
           </p>
         </div>
         <button
