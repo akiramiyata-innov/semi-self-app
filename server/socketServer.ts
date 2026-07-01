@@ -469,17 +469,22 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
           // If user disconnected, free the staff member
           if (session.userSocketId === socket.id) {
-            // Notify staff that the user's connection dropped (not a normal end)
+            // User disconnected — notify staff
             io.to(session.staffSocketId).emit("call:userDisconnected", {
               sessionId,
               machineName: session.machineName,
             });
             releaseSession(sessionId, session.staffSocketId);
+            activeSessions.delete(sessionId);
+            io.to(session.staffSocketId).emit("call:ended", { sessionId });
+            io.to("call-queue").emit("call:ended", { sessionId });
+          } else {
+            // Staff disconnected — notify user with a distinct event (not call:ended)
+            io.to(session.userSocketId).emit("call:staffDisconnected", { sessionId });
+            releaseSession(sessionId, session.staffSocketId);
+            activeSessions.delete(sessionId);
+            io.to("call-queue").emit("call:ended", { sessionId });
           }
-
-          activeSessions.delete(sessionId);
-          io.to(`session:${sessionId}`).emit("call:ended", { sessionId });
-          io.to("call-queue").emit("call:ended", { sessionId }); // Notify all staff to clear the call
         }
       });
 
