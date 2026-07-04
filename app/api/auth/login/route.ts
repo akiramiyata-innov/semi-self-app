@@ -17,6 +17,7 @@ export async function POST(req: NextRequest) {
       email: decoded.email ?? "",
       name: decoded.name ?? decoded.email ?? "",
       isAdmin: adminEmails.includes(decoded.email ?? ""),
+      isManager: !!(decoded.customClaims?.isManager),
     });
 
     const res = NextResponse.json({ ok: true });

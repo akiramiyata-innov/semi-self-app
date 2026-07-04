@@ -83,7 +83,18 @@ export default function StaffPage() {
   const [staffList, setStaffList] = useState<StaffInfo[]>([]);
   const [showStaffList, setShowStaffList] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const [sessionInfo, setSessionInfo] = useState<{ name: string; email: string; isAdmin: boolean } | null>(null);
+  const [sessionInfo, setSessionInfo] = useState<{ uid: string; name: string; email: string; isAdmin: boolean; isManager: boolean } | null>(null);
+
+  // 担当駅設定パネル
+  const [showSettings, setShowSettings] = useState(false);
+  const [stations, setStations] = useState<Array<{ id: string; name: string; code?: string }>>([]);
+  const [myStationIds, setMyStationIds] = useState<string[]>([]);
+  const [savingStations, setSavingStations] = useState(false);
+  // PW変更
+  const [showPwForm, setShowPwForm] = useState(false);
+  const [newPw, setNewPw] = useState("");
+  const [savingPw, setSavingPw] = useState(false);
+  const [pwMsg, setPwMsg] = useState("");
 
   const addToast = useCallback((message: string, type: ToastItem["type"] = "info") => {
     const id = Date.now().toString();
@@ -112,6 +123,9 @@ export default function StaffPage() {
         }
       })
       .catch(() => {});
+    // 駅マスターと自分の担当駅を取得
+    fetch("/api/admin/stations").then((r) => r.json()).then((d) => { if (d.stations) setStations(d.stations); }).catch(() => {});
+    fetch("/api/staff/assignments/me").then((r) => r.json()).then((d) => { if (d.stationIds) setMyStationIds(d.stationIds); }).catch(() => {});
   }, []);
 
   // S5: periodic session expiry check (every 5 minutes)
@@ -137,8 +151,36 @@ export default function StaffPage() {
     sessionStorage.setItem("staffName", name);
     staffNameRef.current = name;
     setStaffName(name);
-    socketRef.current?.emit("staff:join", { name });
-  }, [nameInput]);
+    socketRef.current?.emit("staff:join", { name, uid: sessionInfo?.uid ?? "" });
+  }, [nameInput, sessionInfo]);
+
+  const saveMyStations = useCallback(async () => {
+    setSavingStations(true);
+    await fetch("/api/staff/assignments/me", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stationIds: myStationIds }),
+    });
+    setSavingStations(false);
+    setShowSettings(false);
+    // Re-join to update server-side station list
+    if (staffNameRef.current) {
+      socketRef.current?.emit("staff:join", { name: staffNameRef.current, uid: sessionInfo?.uid ?? "" });
+    }
+  }, [myStationIds, sessionInfo]);
+
+  const savePw = useCallback(async () => {
+    if (newPw.length < 8) { setPwMsg("8文字以上で入力してください"); return; }
+    setSavingPw(true); setPwMsg("");
+    const res = await fetch("/api/auth/change-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ newPassword: newPw }),
+    });
+    if (res.ok) { setPwMsg("変更しました"); setNewPw(""); setShowPwForm(false); }
+    else { const d = await res.json(); setPwMsg(d.error ?? "変更に失敗しました"); }
+    setSavingPw(false);
+  }, [newPw]);
 
   const toggleStatus = useCallback(() => {
     const next: StaffStatus = myStatus === "available" ? "away" : "available";
@@ -601,6 +643,19 @@ export default function StaffPage() {
               <ClipboardList size={13} />
               通話ログ
             </Link>
+            {/* 担当駅・PW設定 */}
+            <button
+              onClick={() => { setShowSettings((v) => !v); setShowPwForm(false); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium rounded-lg transition-colors"
+            >
+              担当駅設定
+            </button>
+            <button
+              onClick={() => { setShowPwForm((v) => !v); setShowSettings(false); setPwMsg(""); setNewPw(""); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium rounded-lg transition-colors"
+            >
+              PW変更
+            </button>
             {sessionInfo?.isAdmin && (
               <>
                 <Link
@@ -638,6 +693,63 @@ export default function StaffPage() {
         {micError && (
           <div className="mt-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg text-red-700 text-xs whitespace-pre-line">
             ⚠️ {micError}
+          </div>
+        )}
+
+        {/* 担当駅設定パネル */}
+        {showSettings && (
+          <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <p className="text-xs font-semibold text-blue-700 mb-2">担当駅を選択（複数可）</p>
+            {stations.length === 0 ? (
+              <p className="text-xs text-gray-400">駅が登録されていません。管理者に駅マスターの登録を依頼してください。</p>
+            ) : (
+              <div className="grid grid-cols-3 gap-1.5 mb-2">
+                {stations.map((s) => (
+                  <label key={s.id} className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={myStationIds.includes(s.id)}
+                      onChange={() => setMyStationIds((prev) =>
+                        prev.includes(s.id) ? prev.filter((id) => id !== s.id) : [...prev, s.id]
+                      )}
+                      className="w-3.5 h-3.5 accent-blue-600"
+                    />
+                    {s.name}
+                  </label>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button onClick={saveMyStations} disabled={savingStations} className="px-3 py-1 bg-blue-600 text-white text-xs rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                {savingStations ? "保存中..." : "保存"}
+              </button>
+              <button onClick={() => setShowSettings(false)} className="px-3 py-1 text-gray-500 border border-gray-300 text-xs rounded-lg hover:bg-white">
+                閉じる
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* PW変更パネル */}
+        {showPwForm && (
+          <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <p className="text-xs font-semibold text-amber-700 mb-2">パスワードを変更</p>
+            <div className="flex gap-2 items-center">
+              <input
+                type="text"
+                value={newPw}
+                onChange={(e) => setNewPw(e.target.value)}
+                placeholder="新しいパスワード（8文字以上）"
+                className="flex-1 px-3 py-1.5 border border-gray-300 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-amber-400"
+              />
+              <button onClick={savePw} disabled={savingPw} className="px-3 py-1 bg-amber-500 text-white text-xs rounded-lg hover:bg-amber-600 disabled:opacity-50 shrink-0">
+                {savingPw ? "変更中..." : "変更"}
+              </button>
+              <button onClick={() => setShowPwForm(false)} className="px-3 py-1 text-gray-500 border border-gray-300 text-xs rounded-lg hover:bg-white shrink-0">
+                閉じる
+              </button>
+            </div>
+            {pwMsg && <p className={`text-xs mt-1 ${pwMsg.includes("変更しました") ? "text-green-600" : "text-red-500"}`}>{pwMsg}</p>}
           </div>
         )}
       </header>

@@ -9,6 +9,7 @@ import type { LangCode, StaffStatus } from "../lib/socketEvents";
 import type { TranscriptEntry, SessionLog } from "../lib/types";
 import { isGCSEnabled, uploadLog } from "../lib/gcsClient";
 import { getGlossaryTerms } from "../lib/glossaryClient";
+import { getAssignments } from "../lib/assignmentClient";
 import type { GlossaryTerm } from "../lib/types";
 
 function getApiKey(): string {
@@ -18,9 +19,11 @@ function getApiKey(): string {
 // ── Staff presence ────────────────────────────────────────────────────────────
 interface StaffRecord {
   socketId: string;
+  uid: string;
   name: string;
   status: StaffStatus;
   activeSessionIds: Set<string>;
+  assignedStations: string[];
 }
 
 const staffMap = new Map<string, StaffRecord>();
@@ -42,6 +45,7 @@ interface CallRecord {
   machineName: string;
   userSocketId: string;
   userLang: LangCode;
+  stationId: string;
   timestamp: number;
 }
 
@@ -211,16 +215,21 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
   io.on("connection", (socket: Socket) => {
 
     // ── Staff joins ───────────────────────────────────────────────────────────
-    socket.on("staff:join", (payload?: { name?: string }) => {
+    socket.on("staff:join", async (payload?: { name?: string; uid?: string }) => {
       const name = (payload?.name ?? "").trim() || "スタッフ";
+      const uid = payload?.uid ?? "";
+
+      const assignedStations = uid ? await getAssignments(uid).catch(() => []) : [];
 
       // Re-register (handles reconnect or name change)
       const existing = staffMap.get(socket.id);
       staffMap.set(socket.id, {
         socketId: socket.id,
+        uid,
         name,
         status: existing?.status ?? "available",
         activeSessionIds: existing?.activeSessionIds ?? new Set(),
+        assignedStations,
       });
 
       socket.join("call-queue");
@@ -250,9 +259,14 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     });
 
     // ── User requests a call ──────────────────────────────────────────────────
-    socket.on("call:request", (payload: { machineId: string; machineName: string; userLang?: LangCode }) => {
-      // No responsive staff (none connected or all set to away)
-      const hasResponsiveStaff = Array.from(staffMap.values()).some((s) => s.status !== "away");
+    socket.on("call:request", (payload: { machineId: string; machineName: string; userLang?: LangCode; stationId?: string }) => {
+      const { stationId } = payload;
+      // Filter eligible staff: not away, and assigned to the calling station (or has no station restrictions)
+      const hasResponsiveStaff = Array.from(staffMap.values()).some((s) => {
+        if (s.status === "away") return false;
+        if (!stationId) return true;
+        return s.assignedStations.length === 0 || s.assignedStations.includes(stationId);
+      });
       if (!hasResponsiveStaff) {
         socket.emit("call:noStaff");
         return;
@@ -265,17 +279,24 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         machineName: payload.machineName,
         userSocketId: socket.id,
         userLang: payload.userLang ?? "ja",
+        stationId: stationId ?? "",
         timestamp: Date.now(),
       };
       callQueue.set(sessionId, record);
       socket.join(`session:${sessionId}`);
 
-      io.to("call-queue").emit("call:incoming", {
+      // Notify only eligible staff (matching station or no restriction)
+      const incomingPayload = {
         sessionId,
         machineId: payload.machineId,
         machineName: payload.machineName,
         userLang: record.userLang,
         timestamp: record.timestamp,
+      };
+      staffMap.forEach((staff) => {
+        if (staff.status === "away") return;
+        if (stationId && staff.assignedStations.length > 0 && !staff.assignedStations.includes(stationId)) return;
+        io.to(staff.socketId).emit("call:incoming", incomingPayload);
       });
     });
 

@@ -1,3 +1,9 @@
+export interface Station {
+  id: string;
+  name: string;
+  code?: string;
+}
+
 export interface GlossaryTerm {
   id: string;
   ja: string;

@@ -30,9 +30,10 @@ function makeId() { return `e-${Date.now()}-${entryCounter++}`; }
 interface UserScreenProps {
   machineId: string;
   machineName: string;
+  stationId?: string;
 }
 
-export function UserScreen({ machineId, machineName }: UserScreenProps) {
+export function UserScreen({ machineId, machineName, stationId = "" }: UserScreenProps) {
   const socketRef = useRef<Socket | null>(null);
   const [connected, setConnected] = useState(false);
   const [phase, setPhase] = useState<Phase>("lang-select");
@@ -321,7 +322,7 @@ export function UserScreen({ machineId, machineName }: UserScreenProps) {
   const callStaff = () => {
     if (!connected) return;
     setPhase("calling");
-    socketRef.current?.emit("call:request", { machineId, machineName, userLang });
+    socketRef.current?.emit("call:request", { machineId, machineName, userLang, stationId });
   };
 
   const endCall = () => {
