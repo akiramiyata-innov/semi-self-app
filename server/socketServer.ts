@@ -215,11 +215,12 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
   io.on("connection", (socket: Socket) => {
 
     // ── Staff joins ───────────────────────────────────────────────────────────
-    socket.on("staff:join", async (payload?: { name?: string; uid?: string }) => {
+    socket.on("staff:join", async (payload?: { name?: string; uid?: string; stationIds?: string[] }) => {
       const name = (payload?.name ?? "").trim() || "スタッフ";
       const uid = payload?.uid ?? "";
 
-      const assignedStations = uid ? await getAssignments(uid).catch(() => []) : [];
+      // stationIds が直接渡された場合はそれを優先（キャッシュ遅延を回避）
+      const assignedStations = payload?.stationIds ?? (uid ? await getAssignments(uid).catch(() => []) : []);
 
       // Re-register (handles reconnect or name change)
       const existing = staffMap.get(socket.id);
@@ -247,6 +248,15 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
       broadcastStaffList();
       console.log(`[staff] joined: ${name} (${socket.id})`);
+    });
+
+    // ── Staff updates own station assignments ────────────────────────────────
+    socket.on("staff:updateStations", (payload: { stationIds: string[] }) => {
+      const existing = staffMap.get(socket.id);
+      if (!existing) return;
+      existing.assignedStations = payload.stationIds ?? [];
+      broadcastStaffList();
+      console.log(`[staff] stations updated: ${existing.name} → [${existing.assignedStations.join(", ")}]`);
     });
 
     // ── Staff sets own status ─────────────────────────────────────────────────

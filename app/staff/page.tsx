@@ -77,6 +77,8 @@ export default function StaffPage() {
 
   // ── Multi-operation: staff presence ──────────────────────────────────────
   const staffNameRef = useRef("");
+  const uidRef = useRef("");
+  const myStationIdsRef = useRef<string[]>([]);
   const [staffName, setStaffName] = useState<string | null>(null);
   const [nameInput, setNameInput] = useState("");
   const [myStatus, setMyStatus] = useState<StaffStatus>("available");
@@ -107,6 +109,9 @@ export default function StaffPage() {
     window.location.href = "/staff/login";
   }, []);
 
+  // initialDataLoaded: sessionInfo・担当駅が両方揃ったら true
+  const [initialDataLoaded, setInitialDataLoaded] = useState(false);
+
   // Check sessionStorage for saved name on mount (per-tab, not shared across tabs)
   useEffect(() => {
     const saved = sessionStorage.getItem("staffName");
@@ -114,19 +119,30 @@ export default function StaffPage() {
       staffNameRef.current = saved;
       setStaffName(saved);
     }
-    fetch("/api/auth/me")
-      .then((r) => r.json())
-      .then((info) => {
-        if (info) {
-          setSessionInfo(info);
-          if (!saved && info.name) setNameInput(info.name);
-        }
-      })
-      .catch(() => {});
-    // 駅マスターと自分の担当駅を取得
-    fetch("/api/admin/stations").then((r) => r.json()).then((d) => { if (d.stations) setStations(d.stations); }).catch(() => {});
-    fetch("/api/staff/assignments/me").then((r) => r.json()).then((d) => { if (d.stationIds) setMyStationIds(d.stationIds); }).catch(() => {});
+    Promise.all([
+      fetch("/api/auth/me").then((r) => r.json()).catch(() => null),
+      fetch("/api/staff/assignments/me").then((r) => r.json()).catch(() => null),
+      fetch("/api/admin/stations").then((r) => r.json()).catch(() => null),
+    ]).then(([info, assignments, stationsData]) => {
+      if (info) {
+        setSessionInfo(info);
+        uidRef.current = info.uid ?? "";
+        if (!saved && info.name) setNameInput(info.name);
+      }
+      if (assignments?.stationIds) {
+        setMyStationIds(assignments.stationIds);
+        myStationIdsRef.current = assignments.stationIds;
+      }
+      if (stationsData?.stations) setStations(stationsData.stations);
+      setInitialDataLoaded(true);
+    });
   }, []);
+
+  // ソケット接続済み かつ 初期データ取得完了 → 担当駅をサーバーへ送信
+  useEffect(() => {
+    if (!connected || !initialDataLoaded) return;
+    socketRef.current?.emit("staff:updateStations", { stationIds: myStationIdsRef.current });
+  }, [connected, initialDataLoaded]);
 
   // S5: periodic session expiry check (every 5 minutes)
   useEffect(() => {
@@ -163,10 +179,8 @@ export default function StaffPage() {
     });
     setSavingStations(false);
     setShowSettings(false);
-    // Re-join to update server-side station list
-    if (staffNameRef.current) {
-      socketRef.current?.emit("staff:join", { name: staffNameRef.current, uid: sessionInfo?.uid ?? "" });
-    }
+    myStationIdsRef.current = myStationIds;
+    socketRef.current?.emit("staff:updateStations", { stationIds: myStationIds });
   }, [myStationIds, sessionInfo]);
 
   const savePw = useCallback(async () => {
@@ -272,7 +286,11 @@ export default function StaffPage() {
 
     s.on("connect", () => {
       setConnected(true);
-      s.emit("staff:join", { name: staffNameRef.current || "スタッフ" });
+      s.emit("staff:join", {
+        name: staffNameRef.current || "スタッフ",
+        uid: uidRef.current,
+        stationIds: myStationIdsRef.current,
+      });
     });
     s.on("disconnect", () => setConnected(false));
 

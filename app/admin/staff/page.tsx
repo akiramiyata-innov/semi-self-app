@@ -164,7 +164,16 @@ export default function AdminStaffPage() {
         body: JSON.stringify({ rows }),
       });
       const data = await res.json();
-      setImportResult(`${data.created}件作成完了`);
+      const results = (data.results as { status: string; email: string; reason?: string }[]) ?? [];
+      const errors = results.filter((r) => r.status === "error");
+      const skipped = results.filter((r) => r.status === "skipped");
+      const parts = [`${data.created}件作成完了`];
+      if (errors.length > 0) {
+        const reasons = errors.map((r) => `${r.email}：${r.reason ?? "不明"}`).join("、");
+        parts.push(`${errors.length}件エラー（${reasons}）`);
+      }
+      if (skipped.length > 0) parts.push(`${skipped.length}件スキップ（必須項目不足）`);
+      setImportResult(parts.join(" / "));
       await fetchAll();
     } catch {
       setImportResult("インポートに失敗しました");
@@ -208,9 +217,18 @@ export default function AdminStaffPage() {
             <p className="text-sm font-medium text-gray-700">Excel / CSV 一括登録</p>
             <p className="text-xs text-gray-400 mt-0.5">列名: 名前・メール・パスワード・マネージャー（○/true）</p>
           </div>
-          <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700">
-            <Upload size={14} />インポート
-          </button>
+          <div className="flex items-center gap-2">
+            <a
+              href="/スタッフ登録テンプレート.xlsx"
+              download
+              className="flex items-center gap-1.5 px-3 py-2 bg-gray-100 text-gray-700 text-sm rounded-lg hover:bg-gray-200 border border-gray-300"
+            >
+              テンプレート
+            </a>
+            <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700">
+              <Upload size={14} />インポート
+            </button>
+          </div>
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleImport} />
         </div>
         {importResult && <p className="text-sm text-blue-600 mb-3 px-1">{importResult}</p>}

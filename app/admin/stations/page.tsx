@@ -29,7 +29,7 @@ export default function AdminStationsPage() {
 
   const addStation = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || !code.trim()) return;
     setAdding(true);
     await fetch("/api/admin/stations", {
       method: "POST",
@@ -63,8 +63,12 @@ export default function AdminStationsPage() {
         body: JSON.stringify({ rows }),
       });
       const data = await res.json();
-      setImportResult(`${data.added}件追加、${data.skipped}件スキップ`);
-      await fetchStations();
+      if (data.warning) {
+        setImportResult(data.warning);
+      } else {
+        setImportResult(`${data.added}件追加、${data.skipped}件スキップ`);
+        await fetchStations();
+      }
     } catch {
       setImportResult("インポートに失敗しました");
     }
@@ -93,11 +97,20 @@ export default function AdminStationsPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-700">Excel / CSV 一括インポート</p>
-              <p className="text-xs text-gray-400 mt-0.5">列名: 駅名（必須）、駅コード（任意）</p>
+              <p className="text-xs text-gray-400 mt-0.5">列名: 駅名（必須）、駅コード（必須）</p>
             </div>
-            <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700">
-              <Upload size={14} />インポート
-            </button>
+            <div className="flex items-center gap-2">
+              <a
+                href="/駅マスター登録テンプレート.xlsx"
+                download
+                className="flex items-center gap-1.5 px-3 py-2 bg-gray-100 text-gray-700 text-sm rounded-lg hover:bg-gray-200 border border-gray-300"
+              >
+                テンプレート
+              </a>
+              <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700">
+                <Upload size={14} />インポート
+              </button>
+            </div>
             <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleImport} />
           </div>
           {importResult && <p className="text-sm text-blue-600 mt-2">{importResult}</p>}
@@ -116,6 +129,7 @@ export default function AdminStationsPage() {
                   <div>
                     <p className="text-sm font-medium text-gray-900">{s.name}</p>
                     {s.code && <p className="text-xs text-gray-400">{s.code}</p>}
+                    <p className="text-xs text-gray-300 font-mono">ID: {s.id}</p>
                   </div>
                   <button onClick={() => deleteStation(s.id, s.name)} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
                     <Trash2 size={16} />
@@ -142,8 +156,9 @@ export default function AdminStationsPage() {
               type="text"
               value={code}
               onChange={(e) => setCode(e.target.value)}
-              placeholder="駅コード（任意）"
+              placeholder="駅コード（必須）"
               className="w-36 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              required
             />
             <button type="submit" disabled={adding} className="flex items-center gap-1 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50">
               <Plus size={14} />追加

@@ -205,6 +205,13 @@ export default function GlossaryPage() {
               用語を追加
             </button>
           )}
+          <a
+            href="/用語集登録テンプレート.xlsx"
+            download
+            className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
+          >
+            テンプレート
+          </a>
           <label className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg border transition-colors cursor-pointer ${importing ? "opacity-50 pointer-events-none" : "text-gray-700 border-gray-300 hover:bg-gray-50"}`}>
             <Upload size={16} />
             {importing ? "インポート中..." : "Excel / CSV で一括登録"}
