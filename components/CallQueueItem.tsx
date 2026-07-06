@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { PhoneCall, PhoneOff } from "lucide-react";
 import { SUPPORTED_LANGS } from "@/lib/languages";
+import { ScreenShareView } from "./ScreenShareView";
 import type { LangCode } from "@/lib/socketEvents";
 
 interface CallQueueItemProps {
@@ -12,6 +13,8 @@ interface CallQueueItemProps {
   userLang?: LangCode;
   timestamp: number;
   taken?: boolean;
+  /** Face-camera preview so staff can see who's calling before answering */
+  faceFrame?: string | null;
   onAnswer: () => void;
   onReject?: () => void;
 }
@@ -27,6 +30,7 @@ export function CallQueueItem({
   userLang,
   timestamp,
   taken,
+  faceFrame,
   onAnswer,
   onReject,
 }: CallQueueItemProps) {
@@ -70,6 +74,12 @@ export function CallQueueItem({
         )}
         <p className="text-xs text-gray-500 mt-0.5">{taken ? "対応中" : `${elapsed(timestamp)} 待機中`}</p>
       </div>
+
+      {!taken && faceFrame && (
+        <div className="w-14 h-14 shrink-0">
+          <ScreenShareView frameData={faceFrame} label="顔" className="w-full h-full" />
+        </div>
+      )}
 
       {!taken && (
         <div className="flex items-center gap-1.5 shrink-0">

@@ -28,6 +28,12 @@ export interface CallAnsweredPayload {
   staffName: string;
 }
 
+// Sent to the requesting user immediately after call:request, before any staff answers —
+// lets the user client tag preview frames (e.g. face camera) with the sessionId while ringing.
+export interface CallRequestedPayload {
+  sessionId: string;
+}
+
 export interface CallTakenPayload {
   sessionId: string;
 }
@@ -60,9 +66,12 @@ export interface TtsAudioPayload {
 }
 
 // Screen share / camera frames
+export type CameraId = "face" | "hand";
+
 export interface ScreenFramePayload {
   sessionId: string;
   frameData: string; // base64 JPEG
+  camera?: CameraId; // which kiosk camera this frame came from (user→staff only)
 }
 
 // Language update
@@ -82,6 +91,7 @@ export interface ServerToStaffEvents {
 
 // Server → User events map
 export interface ServerToUserEvents {
+  "call:requested": (payload: CallRequestedPayload) => void;
   "call:answered": (payload: CallAnsweredPayload) => void;
   "call:ended": (payload: CallEndPayload) => void;
   "speech:staff": (payload: SpeechStaffPayload) => void;

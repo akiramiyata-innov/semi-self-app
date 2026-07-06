@@ -91,27 +91,80 @@ export function UserScreen({ machineId, machineName, stationId = "" }: UserScree
     },
   });
 
-  // Camera — auto-starts when call connects, streams frames to staff via screen:frame
-  const { startCapture: startCamera, stopCapture: stopCamera } = useScreenCapture({
+  // Camera devices — the real kiosk hardware has 2 fixed cameras (face + hand).
+  // For this demo, we auto-detect up to 2 connected cameras (built-in + external USB webcam).
+  // Detection is deferred until the call actually starts (same timing as the original
+  // single-camera permission prompt), not on page load, to avoid an unexpected
+  // permission request/error on the language-select screen.
+  const cameraDevicesRef = useRef<{ face?: string; hand?: string } | null>(null);
+
+  const detectCameraDevices = useCallback(async () => {
+    if (cameraDevicesRef.current) return cameraDevicesRef.current;
+    try {
+      // A camera permission grant is required before device labels/ids are enumerable
+      const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      tmp.getTracks().forEach((t) => t.stop());
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter((d) => d.kind === "videoinput");
+      cameraDevicesRef.current = { face: cams[0]?.deviceId, hand: cams[1]?.deviceId };
+    } catch (e) {
+      console.error("[camera] device enumeration failed:", e);
+      cameraDevicesRef.current = {};
+    }
+    return cameraDevicesRef.current;
+  }, []);
+
+  // Face camera (正面) — auto-starts when call connects, streams frames to staff via screen:frame
+  const { startCapture: startFaceCamera, stopCapture: stopFaceCamera } = useScreenCapture({
     fps: 5,
     quality: 0.6,
     width: 320,
     height: 240,
     onFrame: (frameData) => {
       if (sessionIdRef.current) {
-        socketRef.current?.emit("screen:frame", { sessionId: sessionIdRef.current, frameData });
+        socketRef.current?.emit("screen:frame", { sessionId: sessionIdRef.current, frameData, camera: "face" });
       }
     },
   });
 
+  // Hand camera (手元) — only started if a second camera device was detected
+  const { startCapture: startHandCamera, stopCapture: stopHandCamera } = useScreenCapture({
+    fps: 5,
+    quality: 0.6,
+    width: 320,
+    height: 240,
+    onFrame: (frameData) => {
+      if (sessionIdRef.current) {
+        socketRef.current?.emit("screen:frame", { sessionId: sessionIdRef.current, frameData, camera: "hand" });
+      }
+    },
+  });
+
+  // Face camera starts as soon as the call starts ringing — lets staff see who's
+  // calling on the incoming-call card before pressing 応答 (answer). Hand camera
+  // only starts once the call is actually answered (in-call).
+  const isRingingOrInCall = phase === "calling" || phase === "in-call";
+  const isInCall = phase === "in-call";
+
   useEffect(() => {
-    if (phase === "in-call") {
-      startCamera("camera");
+    if (isRingingOrInCall) {
+      detectCameraDevices().then((devices) => startFaceCamera("camera", devices.face));
     } else {
-      stopCamera();
+      stopFaceCamera();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
+  }, [isRingingOrInCall]);
+
+  useEffect(() => {
+    if (isInCall) {
+      detectCameraDevices().then((devices) => {
+        if (devices.hand) startHandCamera("camera", devices.hand);
+      });
+    } else {
+      stopHandCamera();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isInCall]);
 
   // If speech recognition encounters a fatal error, reset micOnRef too
   useEffect(() => {
@@ -223,6 +276,13 @@ export function UserScreen({ machineId, machineName, stationId = "" }: UserScree
       setPhase((prev) => (prev === "in-call" || prev === "calling") ? "disconnected" : prev);
     });
 
+    s.on("call:requested", (payload: { sessionId: string }) => {
+      // sessionId is known before any staff answers — lets the face camera
+      // (already streaming while ringing) tag its frames correctly.
+      sessionIdRef.current = payload.sessionId;
+      setSessionId(payload.sessionId);
+    });
+
     s.on("call:answered", (payload: { sessionId: string }) => {
       sessionIdRef.current = payload.sessionId;
       setSessionId(payload.sessionId);
@@ -238,6 +298,8 @@ export function UserScreen({ machineId, machineName, stationId = "" }: UserScree
     s.on("call:rejected", () => {
       // Staff declined — show message briefly then return to lang-select
       setPhase("rejected");
+      setSessionId(null);
+      sessionIdRef.current = null;
       setTimeout(() => setPhase("lang-select"), 3000);
     });
 

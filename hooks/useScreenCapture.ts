@@ -42,7 +42,7 @@ export function useScreenCapture({
   }, []);
 
   const startCapture = useCallback(
-    async (type: "display" | "camera" = "display") => {
+    async (type: "display" | "camera" = "display", deviceId?: string) => {
       try {
         const stream =
           type === "display"
@@ -50,7 +50,10 @@ export function useScreenCapture({
                 video: { frameRate: fps },
                 audio: false,
               })
-            : await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            : await navigator.mediaDevices.getUserMedia({
+                video: deviceId ? { deviceId: { exact: deviceId } } : true,
+                audio: false,
+              });
 
         streamRef.current = stream;
         // Stop capture if the user stops sharing via browser UI

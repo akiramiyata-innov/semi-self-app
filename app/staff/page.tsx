@@ -29,7 +29,8 @@ interface ActiveSession {
   transcript: TranscriptEntry[];
   interimUserText: string;
   interimStaffText: string;
-  userCameraFrame: string | null;
+  userCameraFaceFrame: string | null;
+  userCameraHandFrame: string | null;
   isListening: boolean;
   isCapturing: boolean;
 }
@@ -69,6 +70,8 @@ export default function StaffPage() {
   const [callQueue, setCallQueue] = useState<IncomingCall[]>([]);
   const [takenSessions, setTakenSessions] = useState<Set<string>>(new Set());
   const [activeSessions, setActiveSessions] = useState<Map<string, ActiveSession>>(new Map());
+  // Face-camera preview for calls still ringing (not yet answered) — sessionId → frameData
+  const [previewFaceFrames, setPreviewFaceFrames] = useState<Map<string, string>>(new Map());
 
   // ▶ Fix: use both ref (for callbacks) AND state (for re-renders)
   const activeListeningSession = useRef<string | null>(null);
@@ -326,6 +329,12 @@ export default function StaffPage() {
 
     s.on("call:taken", (payload: { sessionId: string }) => {
       setTakenSessions((prev) => new Set([...prev, payload.sessionId]));
+      setPreviewFaceFrames((prev) => {
+        if (!prev.has(payload.sessionId)) return prev;
+        const next = new Map(prev);
+        next.delete(payload.sessionId);
+        return next;
+      });
     });
 
     s.on("call:ended", (payload: { sessionId: string }) => {
@@ -336,6 +345,12 @@ export default function StaffPage() {
         return next;
       });
       setCallQueue((prev) => prev.filter((c) => c.sessionId !== sessionId));
+      setPreviewFaceFrames((prev) => {
+        if (!prev.has(sessionId)) return prev;
+        const next = new Map(prev);
+        next.delete(sessionId);
+        return next;
+      });
       if (activeListeningSession.current === sessionId) {
         stopMic();
         activeListeningSession.current = null;
@@ -374,8 +389,22 @@ export default function StaffPage() {
       }
     );
 
-    s.on("screen:frame", (payload: { sessionId: string; frameData: string }) => {
-      updateSession(payload.sessionId, { userCameraFrame: payload.frameData });
+    s.on("screen:frame", (payload: { sessionId: string; frameData: string; camera?: "face" | "hand" }) => {
+      // Face-camera frames can arrive before the call is answered (ringing preview) —
+      // keep them keyed by sessionId so the incoming-call card can show it.
+      if (payload.camera !== "hand") {
+        setPreviewFaceFrames((prev) => {
+          const next = new Map(prev);
+          next.set(payload.sessionId, payload.frameData);
+          return next;
+        });
+      }
+      updateSession(
+        payload.sessionId,
+        payload.camera === "hand"
+          ? { userCameraHandFrame: payload.frameData }
+          : { userCameraFaceFrame: payload.frameData }
+      );
     });
 
     return () => { s.disconnect(); };
@@ -396,11 +425,13 @@ export default function StaffPage() {
       transcript: [],
       interimUserText: "",
       interimStaffText: "",
-      userCameraFrame: null,
+      // Carry over the ringing-preview face frame so there's no blank flash on answer
+      userCameraFaceFrame: previewFaceFrames.get(call.sessionId) ?? null,
+      userCameraHandFrame: null,
       isListening: false,
       isCapturing: false,
     }]]));
-  }, []);
+  }, [previewFaceFrames]);
 
   const rejectCall = useCallback((sessionId: string) => {
     socketRef.current?.emit("call:reject", { sessionId });
@@ -787,6 +818,7 @@ export default function StaffPage() {
                   onAnswer={() => answerCall(call)}
                   onReject={() => rejectCall(call.sessionId)}
                   userLang={call.userLang}
+                  faceFrame={previewFaceFrames.get(call.sessionId) ?? null}
                 />
               </div>
             ))}
@@ -822,7 +854,8 @@ export default function StaffPage() {
                   transcript={session.transcript}
                   interimUserText={session.interimUserText}
                   interimStaffText={session.interimStaffText}
-                  userCameraFrame={session.userCameraFrame}
+                  userCameraFaceFrame={session.userCameraFaceFrame}
+                  userCameraHandFrame={session.userCameraHandFrame}
                   isListening={isListening}
                   isCapturing={capturing && captureSessionRef.current === session.sessionId}
                   micError={micError}

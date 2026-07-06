@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from "http";
 import type { Server as HttpServer } from "http";
 import { getCached, setCache } from "../lib/translateCache";
 import { getLang, getGoogleTranslateLangCode } from "../lib/languages";
-import type { LangCode, StaffStatus } from "../lib/socketEvents";
+import type { LangCode, StaffStatus, CameraId } from "../lib/socketEvents";
 import type { TranscriptEntry, SessionLog } from "../lib/types";
 import { isGCSEnabled, uploadLog } from "../lib/gcsClient";
 import { getGlossaryTerms } from "../lib/glossaryClient";
@@ -97,6 +97,21 @@ async function saveSessionLog(session: ActiveSession): Promise<void> {
   } catch (e) {
     console.error("[log] failed to save session log:", e);
   }
+}
+
+// ── Staff eligibility ─────────────────────────────────────────────────────────
+// Staff who would see this station's incoming call card (not away, no station
+// restriction or explicitly assigned to it). Reused for both call:incoming and
+// the pre-answer face-camera preview so a staff member never receives video for
+// a call they can't see/take.
+function getEligibleStaffSocketIds(stationId: string): string[] {
+  const ids: string[] = [];
+  staffMap.forEach((staff) => {
+    if (staff.status === "away") return;
+    if (stationId && staff.assignedStations.length > 0 && !staff.assignedStations.includes(stationId)) return;
+    ids.push(staff.socketId);
+  });
+  return ids;
 }
 
 // ── Staff status helpers ──────────────────────────────────────────────────────
@@ -273,13 +288,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     // ── User requests a call ──────────────────────────────────────────────────
     socket.on("call:request", (payload: { machineId: string; machineName: string; userLang?: LangCode; stationId?: string }) => {
       const { stationId } = payload;
-      // Filter eligible staff: not away, and assigned to the calling station (or has no station restrictions)
-      const hasResponsiveStaff = Array.from(staffMap.values()).some((s) => {
-        if (s.status === "away") return false;
-        if (!stationId) return true;
-        return s.assignedStations.length === 0 || s.assignedStations.includes(stationId);
-      });
-      if (!hasResponsiveStaff) {
+      const eligibleStaffSocketIds = getEligibleStaffSocketIds(stationId ?? "");
+      if (eligibleStaffSocketIds.length === 0) {
         socket.emit("call:noStaff");
         return;
       }
@@ -296,6 +306,9 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       };
       callQueue.set(sessionId, record);
       socket.join(`session:${sessionId}`);
+      // Let the user client know its sessionId before any answer, so it can tag
+      // preview frames (face camera) sent while the call is still ringing.
+      socket.emit("call:requested", { sessionId });
 
       // Notify only eligible staff (matching station or no restriction)
       const incomingPayload = {
@@ -305,10 +318,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         userLang: record.userLang,
         timestamp: record.timestamp,
       };
-      staffMap.forEach((staff) => {
-        if (staff.status === "away") return;
-        if (stationId && staff.assignedStations.length > 0 && !staff.assignedStations.includes(stationId)) return;
-        io.to(staff.socketId).emit("call:incoming", incomingPayload);
+      eligibleStaffSocketIds.forEach((sid) => {
+        io.to(sid).emit("call:incoming", incomingPayload);
       });
     });
 
@@ -477,11 +488,22 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     });
 
     // ── Camera frame (user → staff) ───────────────────────────────────────────
-    socket.on("screen:frame", (payload: { sessionId: string; frameData: string }) => {
-      const { sessionId, frameData } = payload;
+    socket.on("screen:frame", (payload: { sessionId: string; frameData: string; camera?: CameraId }) => {
+      const { sessionId, frameData, camera } = payload;
+
       const session = activeSessions.get(sessionId);
-      if (!session) return;
-      io.to(session.staffSocketId).emit("screen:frame", { sessionId, frameData });
+      if (session) {
+        io.to(session.staffSocketId).emit("screen:frame", { sessionId, frameData, camera });
+        return;
+      }
+
+      // Call not yet answered — relay the face-camera preview to every staff
+      // member who can see this call's incoming card (same eligibility as call:incoming).
+      const pending = callQueue.get(sessionId);
+      if (!pending) return;
+      getEligibleStaffSocketIds(pending.stationId).forEach((sid) => {
+        io.to(sid).emit("screen:frame", { sessionId, frameData, camera });
+      });
     });
 
     // ── Language update ───────────────────────────────────────────────────────
