@@ -139,14 +139,14 @@ async function translateText(text: string, from: string, to: string): Promise<st
   return translated;
 }
 
-async function translateWithGlossary(text: string, from: string, to: string): Promise<string> {
+async function translateWithGlossary(text: string, fromLang: string, toLang: string): Promise<string> {
   const terms = await getGlossaryTerms();
   const replacements: Array<{ placeholder: string; target: string }> = [];
   let processed = text;
 
   terms.forEach((term: GlossaryTerm, i: number) => {
-    const src = (from === "ja" ? term.ja : term[from as keyof GlossaryTerm]) as string | undefined;
-    const tgt = (to === "ja" ? term.ja : term[to as keyof GlossaryTerm]) as string | undefined;
+    const src = term[fromLang as keyof GlossaryTerm] as string | undefined;
+    const tgt = term[toLang as keyof GlossaryTerm] as string | undefined;
     if (src && tgt && processed.includes(src)) {
       const placeholder = `GLOSS${i}TERM`;
       processed = processed.split(src).join(placeholder);
@@ -154,7 +154,9 @@ async function translateWithGlossary(text: string, from: string, to: string): Pr
     }
   });
 
-  let result = await translateText(processed, from, to);
+  const fromCode = getGoogleTranslateLangCode(fromLang as LangCode);
+  const toCode = getGoogleTranslateLangCode(toLang as LangCode);
+  let result = await translateText(processed, fromCode, toCode);
   replacements.forEach(({ placeholder, target }) => {
     result = result.split(placeholder).join(target);
   });
@@ -385,9 +387,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
         let translatedText: string | undefined;
         if (isFinal && lang !== "ja") {
-          const fromCode = getGoogleTranslateLangCode(lang);
           try {
-            translatedText = await translateWithGlossary(text, fromCode, "ja");
+            translatedText = await translateWithGlossary(text, lang, "ja");
           } catch (e) {
             console.error("[speech:user] translation error:", e);
             io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "userToJa" });
@@ -432,9 +433,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         }
 
         if (userLang !== "ja") {
-          const toCode = getGoogleTranslateLangCode(userLang);
           try {
-            translatedText = await translateWithGlossary(text, "ja", toCode);
+            translatedText = await translateWithGlossary(text, "ja", userLang);
           } catch (e) {
             console.error("[speech:staff] translation error:", e);
             io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "jaToUser" });

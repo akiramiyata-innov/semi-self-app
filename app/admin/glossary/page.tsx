@@ -8,14 +8,15 @@ import type { GlossaryTerm } from "@/lib/types";
 
 const LANG_LABELS: { key: keyof GlossaryTerm; label: string }[] = [
   { key: "en", label: "英語" },
-  { key: "zh", label: "中国語" },
+  { key: "zh", label: "中国語（簡体）" },
+  { key: "zh-TW", label: "中国語（繁体）" },
   { key: "ko", label: "韓国語" },
   { key: "fr", label: "仏語" },
   { key: "es", label: "西語" },
   { key: "th", label: "タイ語" },
 ];
 
-const EMPTY_FORM = { ja: "", en: "", zh: "", ko: "", fr: "", es: "", th: "" };
+const EMPTY_FORM = { ja: "", en: "", zh: "", "zh-TW": "", ko: "", fr: "", es: "", th: "" };
 
 export default function GlossaryPage() {
   const router = useRouter();
@@ -84,7 +85,8 @@ export default function GlossaryPage() {
         return {
           ja: normalize(["日本語", "ja", "JA", "Japanese"]),
           en: normalize(["英語", "en", "EN", "English"]),
-          zh: normalize(["中国語", "zh", "ZH", "Chinese"]),
+          zh: normalize(["中国語（簡体）", "中国語", "zh", "ZH", "Chinese", "Simplified Chinese"]),
+          "zh-TW": normalize(["中国語（繁体）", "繁体字中国語", "zh-TW", "ZH-TW", "Traditional Chinese", "繁体中文"]),
           ko: normalize(["韓国語", "ko", "KO", "Korean"]),
           fr: normalize(["フランス語", "fr", "FR", "French"]),
           es: normalize(["スペイン語", "es", "ES", "Spanish"]),

@@ -1,4 +1,4 @@
-export type LangCode = "ja" | "en" | "zh" | "ko" | "fr" | "es" | "th";
+export type LangCode = "ja" | "en" | "zh" | "ko" | "fr" | "es" | "th" | "zh-TW";
 
 // Staff presence
 export type StaffStatus = "available" | "busy" | "away";

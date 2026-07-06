@@ -9,6 +9,7 @@ export interface GlossaryTerm {
   ja: string;
   en?: string;
   zh?: string;
+  "zh-TW"?: string;
   ko?: string;
   fr?: string;
   es?: string;

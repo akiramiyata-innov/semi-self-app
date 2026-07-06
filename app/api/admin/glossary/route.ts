@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
       ja: body.ja.trim(),
       en: body.en?.trim() || undefined,
       zh: body.zh?.trim() || undefined,
+      "zh-TW": body["zh-TW"]?.trim() || undefined,
       ko: body.ko?.trim() || undefined,
       fr: body.fr?.trim() || undefined,
       es: body.es?.trim() || undefined,
