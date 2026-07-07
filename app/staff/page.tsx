@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { io, Socket } from "socket.io-client";
-import { Wifi, WifiOff, Monitor, Mic, ClipboardList, Users, ChevronDown } from "lucide-react";
+import { Wifi, WifiOff, Monitor, Mic, ClipboardList, Users, ChevronDown, Mail, LogOut, MapPin, KeyRound, BookOpen } from "lucide-react";
 import { CallQueueItem } from "@/components/CallQueueItem";
 import { ActiveCallPanel } from "@/components/ActiveCallPanel";
 import { Toast } from "@/components/Toast";
@@ -87,6 +87,8 @@ export default function StaffPage() {
   const [myStatus, setMyStatus] = useState<StaffStatus>("available");
   const [staffList, setStaffList] = useState<StaffInfo[]>([]);
   const [showStaffList, setShowStaffList] = useState(false);
+  const [showKioskMenu, setShowKioskMenu] = useState(false);
+  const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [sessionInfo, setSessionInfo] = useState<{ uid: string; name: string; email: string; isAdmin: boolean; isManager: boolean } | null>(null);
 
@@ -617,11 +619,9 @@ export default function StaffPage() {
             </div>
           </div>
 
-          {/* ── 自分のステータス ── */}
-          <div className="flex items-center gap-2">
-            {staffName && (
-              <span className="text-sm font-medium text-gray-700 hidden sm:inline">{staffName}</span>
-            )}
+          {/* ── 右側：ステータス・オンライン・接続・メニュー ── */}
+          <div className="flex items-center gap-2 min-w-0">
+            {/* 自分のステータス */}
             <button
               onClick={myStatus !== "busy" ? toggleStatus : undefined}
               disabled={myStatus === "busy"}
@@ -640,133 +640,192 @@ export default function StaffPage() {
               }`} />
               {myStatus === "available" ? "対応可" : myStatus === "busy" ? "対応中" : "離席"}
             </button>
-          </div>
 
-          {/* ── オンラインスタッフ ── */}
-          <div className="relative">
-            <button
-              onClick={() => setShowStaffList((v) => !v)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              <Users size={13} />
-              {staffList.length}名オンライン
-              <ChevronDown size={11} className={`transition-transform ${showStaffList ? "rotate-180" : ""}`} />
-            </button>
-            {showStaffList && (
-              <div className="absolute left-0 top-full mt-1 w-56 bg-white border border-gray-200 rounded-xl shadow-lg z-40 py-2">
-                {staffList.length === 0 ? (
-                  <p className="text-xs text-gray-400 px-3 py-2">スタッフなし</p>
-                ) : (
-                  staffList.map((sf) => (
-                    <div key={sf.socketId} className="flex items-center gap-2.5 px-3 py-2">
-                      <span className={`w-2 h-2 rounded-full shrink-0 ${
-                        sf.status === "available" ? "bg-green-500" :
-                        sf.status === "busy" ? "bg-blue-500" : "bg-gray-400"
-                      }`} />
-                      <span className="text-sm text-gray-800 flex-1 truncate">
-                        {sf.name}
-                        {sf.socketId === socketRef.current?.id && (
-                          <span className="text-gray-400 text-xs ml-1">(自分)</span>
-                        )}
-                      </span>
-                      <span className="text-xs text-gray-400 shrink-0">
-                        {sf.status === "available" ? "対応可" :
-                         sf.status === "busy" ? `${sf.activeCalls}件対応中` : "離席"}
-                      </span>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* ── マイク許可確認 ── */}
-          <button
-            onClick={async () => {
-              try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                stream.getTracks().forEach((t) => t.stop());
-                alert("✅ マイクの許可が確認できました。");
-              } catch (e: unknown) {
-                const err = e as DOMException;
-                alert(`❌ マイクエラー: ${err.name}`);
-              }
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-300 text-xs font-medium rounded-lg transition-colors"
-          >
-            <Mic size={12} />
-            マイク許可確認
-          </button>
-
-          {/* ── キオスク端末リンク ── */}
-          <div className="flex items-center gap-1.5">
-            {KIOSK_MACHINES.map((m) => (
-              <a
-                key={m.id}
-                href={`/user?machine=${m.id}&name=${encodeURIComponent(m.name)}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 px-2 py-1 bg-gray-100 hover:bg-blue-50 hover:text-blue-700 text-gray-600 text-xs rounded-lg border border-gray-200 hover:border-blue-300 transition-colors"
+            {/* オンラインスタッフ */}
+            <div className="relative">
+              <button
+                onClick={() => { setShowStaffList((v) => !v); setShowKioskMenu(false); setShowAccountMenu(false); }}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
               >
-                <Monitor size={11} />
-                {m.name}
-              </a>
-            ))}
-          </div>
+                <Users size={13} />
+                <span className="hidden sm:inline">{staffList.length}名</span>
+                <ChevronDown size={11} className={`transition-transform ${showStaffList ? "rotate-180" : ""}`} />
+              </button>
+              {showStaffList && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setShowStaffList(false)} />
+                  <div className="absolute right-0 top-full mt-1.5 w-60 bg-white border border-gray-200 rounded-xl shadow-lg z-40 py-2">
+                    <p className="text-[11px] font-semibold text-gray-400 px-3 pb-1.5">オンラインスタッフ</p>
+                    {staffList.length === 0 ? (
+                      <p className="text-xs text-gray-400 px-3 py-2">スタッフなし</p>
+                    ) : (
+                      staffList.map((sf) => (
+                        <div key={sf.socketId} className="flex items-center gap-2.5 px-3 py-2">
+                          <span className={`w-2 h-2 rounded-full shrink-0 ${
+                            sf.status === "available" ? "bg-green-500" :
+                            sf.status === "busy" ? "bg-blue-500" : "bg-gray-400"
+                          }`} />
+                          <span className="text-sm text-gray-800 flex-1 truncate">
+                            {sf.name}
+                            {sf.socketId === socketRef.current?.id && (
+                              <span className="text-gray-400 text-xs ml-1">(自分)</span>
+                            )}
+                          </span>
+                          <span className="text-xs text-gray-400 shrink-0">
+                            {sf.status === "available" ? "対応可" :
+                             sf.status === "busy" ? `${sf.activeCalls}件対応中` : "離席"}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
 
-          {/* ── ログ・接続状態 ── */}
-          <div className="flex items-center gap-3 shrink-0">
-            <Link
-              href="/logs"
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium rounded-lg transition-colors"
-            >
-              <ClipboardList size={13} />
-              通話ログ
-            </Link>
-            {/* 担当駅・PW設定 */}
-            <button
-              onClick={() => { setShowSettings((v) => !v); setShowPwForm(false); }}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium rounded-lg transition-colors"
-            >
-              担当駅設定
-            </button>
-            <button
-              onClick={() => { setShowPwForm((v) => !v); setShowSettings(false); setPwMsg(""); setNewPw(""); }}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium rounded-lg transition-colors"
-            >
-              PW変更
-            </button>
-            {sessionInfo?.isAdmin && (
-              <>
-                <Link
-                  href="/admin/staff"
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium rounded-lg transition-colors"
-                >
-                  スタッフ管理
-                </Link>
-                <Link
-                  href="/admin/glossary"
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium rounded-lg transition-colors"
-                >
-                  用語集管理
-                </Link>
-              </>
-            )}
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-red-500 hover:bg-red-50 text-xs font-medium rounded-lg transition-colors"
-            >
-              ログアウト
-            </button>
-            {connected ? (
-              <span className="flex items-center gap-1.5 text-green-600 text-sm">
-                <Wifi size={14} /> 接続中
-              </span>
-            ) : (
-              <span className="flex items-center gap-1.5 text-red-500 text-sm">
-                <WifiOff size={14} /> 切断中
-              </span>
-            )}
+            {/* 接続状態 */}
+            <span className="hidden sm:flex items-center gap-1.5 text-sm shrink-0" title={connected ? "サーバーに接続中" : "サーバーから切断"}>
+              {connected
+                ? <><Wifi size={14} className="text-green-600" /><span className="text-green-600 hidden md:inline">接続中</span></>
+                : <><WifiOff size={14} className="text-red-500" /><span className="text-red-500 hidden md:inline">切断中</span></>}
+            </span>
+
+            <span className="w-px h-6 bg-gray-200 mx-0.5 hidden sm:block" />
+
+            {/* キオスク画面を開く */}
+            <div className="relative">
+              <button
+                onClick={() => { setShowKioskMenu((v) => !v); setShowStaffList(false); setShowAccountMenu(false); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium rounded-lg transition-colors"
+              >
+                <Monitor size={13} />
+                <span className="hidden sm:inline">キオスク</span>
+                <ChevronDown size={11} className={`transition-transform ${showKioskMenu ? "rotate-180" : ""}`} />
+              </button>
+              {showKioskMenu && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setShowKioskMenu(false)} />
+                  <div className="absolute right-0 top-full mt-1.5 w-52 bg-white border border-gray-200 rounded-xl shadow-lg z-40 py-2">
+                    <p className="text-[11px] font-semibold text-gray-400 px-3 pb-1.5">キオスク画面を開く（別タブ）</p>
+                    {KIOSK_MACHINES.map((m) => (
+                      <a
+                        key={m.id}
+                        href={`/user?machine=${m.id}&name=${encodeURIComponent(m.name)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={() => setShowKioskMenu(false)}
+                        className="flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                      >
+                        <Monitor size={14} className="text-gray-400" />
+                        {m.name}
+                      </a>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* アカウントメニュー */}
+            <div className="relative">
+              <button
+                onClick={() => { setShowAccountMenu((v) => !v); setShowStaffList(false); setShowKioskMenu(false); }}
+                className="flex items-center gap-2 pl-1.5 pr-2 py-1 rounded-lg hover:bg-gray-100 transition-colors"
+                title="アカウント・設定メニュー"
+              >
+                <span className="w-7 h-7 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center shrink-0">
+                  {(staffName?.[0] ?? sessionInfo?.name?.[0] ?? "?").toUpperCase()}
+                </span>
+                <span className="text-sm font-medium text-gray-700 hidden md:inline max-w-[120px] truncate">{staffName ?? "スタッフ"}</span>
+                <ChevronDown size={12} className={`text-gray-400 transition-transform ${showAccountMenu ? "rotate-180" : ""}`} />
+              </button>
+              {showAccountMenu && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setShowAccountMenu(false)} />
+                  <div className="absolute right-0 top-full mt-1.5 w-64 bg-white border border-gray-200 rounded-xl shadow-lg z-40 overflow-hidden">
+                    {/* アカウント情報 */}
+                    <div className="px-3.5 py-3 border-b border-gray-100 bg-gray-50">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-gray-800 truncate">{staffName ?? "スタッフ"}</p>
+                        {sessionInfo?.isAdmin && (
+                          <span className="text-[10px] font-bold text-purple-600 bg-purple-100 px-1.5 py-0.5 rounded shrink-0">管理者</span>
+                        )}
+                      </div>
+                      {sessionInfo?.email && (
+                        <p className="flex items-center gap-1 text-xs text-gray-400 mt-0.5">
+                          <Mail size={11} className="shrink-0" />
+                          <span className="truncate">{sessionInfo.email}</span>
+                        </p>
+                      )}
+                    </div>
+                    {/* メニュー項目 */}
+                    <div className="py-1">
+                      <button
+                        onClick={async () => {
+                          setShowAccountMenu(false);
+                          try {
+                            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                            stream.getTracks().forEach((t) => t.stop());
+                            alert("✅ マイクの許可が確認できました。");
+                          } catch (e: unknown) {
+                            const err = e as DOMException;
+                            alert(`❌ マイクエラー: ${err.name}`);
+                          }
+                        }}
+                        className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
+                      >
+                        <Mic size={15} className="text-gray-400" /> マイク許可確認
+                      </button>
+                      <Link
+                        href="/logs"
+                        onClick={() => setShowAccountMenu(false)}
+                        className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                      >
+                        <ClipboardList size={15} className="text-gray-400" /> 通話ログ
+                      </Link>
+                      <button
+                        onClick={() => { setShowSettings(true); setShowPwForm(false); setShowAccountMenu(false); }}
+                        className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
+                      >
+                        <MapPin size={15} className="text-gray-400" /> 担当駅設定
+                      </button>
+                      <button
+                        onClick={() => { setShowPwForm(true); setShowSettings(false); setPwMsg(""); setNewPw(""); setShowAccountMenu(false); }}
+                        className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
+                      >
+                        <KeyRound size={15} className="text-gray-400" /> パスワード変更
+                      </button>
+                      {sessionInfo?.isAdmin && (
+                        <>
+                          <div className="my-1 border-t border-gray-100" />
+                          <p className="text-[11px] font-semibold text-gray-400 px-3.5 py-1">管理者メニュー</p>
+                          <Link
+                            href="/admin/staff"
+                            onClick={() => setShowAccountMenu(false)}
+                            className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            <Users size={15} className="text-gray-400" /> スタッフ管理
+                          </Link>
+                          <Link
+                            href="/admin/glossary"
+                            onClick={() => setShowAccountMenu(false)}
+                            className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            <BookOpen size={15} className="text-gray-400" /> 用語集管理
+                          </Link>
+                        </>
+                      )}
+                      <div className="my-1 border-t border-gray-100" />
+                      <button
+                        onClick={() => { setShowAccountMenu(false); handleLogout(); }}
+                        className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-red-500 hover:bg-red-50 transition-colors text-left"
+                      >
+                        <LogOut size={15} /> ログアウト
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
 
@@ -814,6 +873,9 @@ export default function StaffPage() {
         {showPwForm && (
           <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
             <p className="text-xs font-semibold text-amber-700 mb-2">パスワードを変更</p>
+            {sessionInfo?.email && (
+              <p className="text-xs text-gray-500 mb-2">対象アカウント：{sessionInfo.email}</p>
+            )}
             <div className="flex gap-2 items-center">
               <input
                 type="text"
