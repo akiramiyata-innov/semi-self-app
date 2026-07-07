@@ -1,7 +1,7 @@
 import { Storage } from "@google-cloud/storage";
 import type { SessionLog, SessionSummary } from "./types";
 
-function getGCSBucket() {
+export function getGCSBucket() {
   const credentialsJson = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
   const bucketName = process.env.GOOGLE_STORAGE_BUCKET;
   if (!credentialsJson || !bucketName) return null;

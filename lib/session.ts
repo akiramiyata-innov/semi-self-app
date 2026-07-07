@@ -47,3 +47,9 @@ export async function getSessionFromRequest(req: NextRequest): Promise<SessionPa
   if (!token) return null;
   return verifySessionToken(token);
 }
+
+/** Returns the session only if it belongs to an admin, otherwise null. */
+export async function requireAdmin(req: NextRequest): Promise<SessionPayload | null> {
+  const session = await getSessionFromRequest(req);
+  return session?.isAdmin ? session : null;
+}

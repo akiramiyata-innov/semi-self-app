@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.7.4] - 2026-07-07
+
+### 変更（コードレビュー指摘対応・バッチ3-b／挙動は不変のリファクタ）
+- Next.js 16 で非推奨になった `middleware` 規約を `proxy` に移行（`middleware.ts` → `proxy.ts`、関数名 `middleware` → `proxy`）。起動時の非推奨警告を解消
+- 認証チェックの重複を解消：各 API ルートにコピペされていた `requireAdmin` / `requireAuth` を `lib/session.ts` の `requireAdmin` / `getSessionFromRequest` に一本化（11ファイル）
+- GCS＋ローカルファイル＋TTLキャッシュの重複実装（用語集・駅・担当駅の3モジュール）を汎用の `lib/jsonStore.ts`（`createJsonStore`）に集約。`getGCSBucket` も `gcsClient` から再利用
+- 未使用のデッドコード（`stations/import` の `normalize` 関数）を削除
+- 正味 約180行削減（挙動は不変・認証レスポンス／Fresh読み取りの検証済み）
+
 ## [1.7.3] - 2026-07-07
 
 ### 修正（コードレビュー指摘対応・バッチ3-a）

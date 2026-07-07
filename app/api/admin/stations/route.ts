@@ -1,22 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifySessionToken, SESSION_COOKIE_NAME } from "@/lib/session";
+import { requireAdmin, getSessionFromRequest } from "@/lib/session";
 import { getStations, saveStations } from "@/lib/stationClient";
 
-async function requireAdmin(req: NextRequest) {
-  const token = req.cookies.get(SESSION_COOKIE_NAME)?.value;
-  if (!token) return null;
-  const session = await verifySessionToken(token);
-  return session?.isAdmin ? session : null;
-}
-
-async function requireAuth(req: NextRequest) {
-  const token = req.cookies.get(SESSION_COOKIE_NAME)?.value;
-  if (!token) return null;
-  return verifySessionToken(token);
-}
-
 export async function GET(req: NextRequest) {
-  if (!await requireAuth(req)) {
+  if (!await getSessionFromRequest(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   const stations = await getStations();
