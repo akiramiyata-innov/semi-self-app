@@ -64,14 +64,29 @@ function writeToLocal(terms: GlossaryTerm[]): void {
   writeFileSync(LOCAL_PATH, JSON.stringify(terms, null, 2), "utf-8");
 }
 
+async function loadTerms(): Promise<GlossaryTerm[]> {
+  const gcs = await readFromGCS();
+  return gcs ?? readFromLocal();
+}
+
 export async function getGlossaryTerms(): Promise<GlossaryTerm[]> {
   const now = Date.now();
   if (cache && cache.expiresAt > now) return cache.terms;
 
-  const gcs = await readFromGCS();
-  const terms = gcs ?? readFromLocal();
+  const terms = await loadTerms();
   cache = { terms, expiresAt: now + TTL_MS };
   return terms;
+}
+
+/**
+ * Reads the backing store directly, bypassing the in-process cache.
+ * The Socket.IO server runs as a separate module instance from the Next.js API
+ * routes, so it never sees invalidateGlossaryCache() calls from the admin routes.
+ * It uses this fresh read so admin glossary edits reflect immediately in live
+ * translation/STT instead of after the cache TTL.
+ */
+export async function getGlossaryTermsFresh(): Promise<GlossaryTerm[]> {
+  return loadTerms();
 }
 
 export async function saveGlossaryTerms(terms: GlossaryTerm[]): Promise<void> {

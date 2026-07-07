@@ -8,8 +8,8 @@ import { getLang, getGoogleTranslateLangCode } from "../lib/languages";
 import type { LangCode, StaffStatus, CameraId } from "../lib/socketEvents";
 import type { TranscriptEntry, SessionLog } from "../lib/types";
 import { isGCSEnabled, uploadLog } from "../lib/gcsClient";
-import { getGlossaryTerms } from "../lib/glossaryClient";
-import { getAssignments } from "../lib/assignmentClient";
+import { getGlossaryTermsFresh } from "../lib/glossaryClient";
+import { getAssignmentsFresh } from "../lib/assignmentClient";
 import type { GlossaryTerm } from "../lib/types";
 
 function getApiKey(): string {
@@ -165,7 +165,7 @@ async function translateText(text: string, from: string, to: string): Promise<st
 }
 
 async function translateWithGlossary(text: string, fromLang: string, toLang: string): Promise<string> {
-  const terms = await getGlossaryTerms();
+  const terms = await getGlossaryTermsFresh();
   const replacements: Array<{ placeholder: string; target: string }> = [];
   let processed = text;
 
@@ -247,7 +247,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       const uid = payload?.uid ?? "";
 
       // stationIds が直接渡された場合はそれを優先（キャッシュ遅延を回避）
-      const assignedStations = payload?.stationIds ?? (uid ? await getAssignments(uid).catch(() => []) : []);
+      const assignedStations = payload?.stationIds ?? (uid ? await getAssignmentsFresh(uid).catch(() => []) : []);
 
       // Re-register (handles reconnect or name change)
       const existing = staffMap.get(socket.id);

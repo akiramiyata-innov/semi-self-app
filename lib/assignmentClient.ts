@@ -66,17 +66,32 @@ function writeToLocal(map: AssignmentMap): void {
   writeFileSync(LOCAL_PATH, JSON.stringify(map, null, 2), "utf-8");
 }
 
+async function loadAll(): Promise<AssignmentMap> {
+  const gcs = await readFromGCS();
+  return gcs ?? readFromLocal();
+}
+
 async function getAll(): Promise<AssignmentMap> {
   const now = Date.now();
   if (cache && cache.expiresAt > now) return cache.map;
-  const gcs = await readFromGCS();
-  const map = gcs ?? readFromLocal();
+  const map = await loadAll();
   cache = { map, expiresAt: now + TTL_MS };
   return map;
 }
 
 export async function getAssignments(uid: string): Promise<string[]> {
   const map = await getAll();
+  return map[uid] ?? [];
+}
+
+/**
+ * Reads assignments directly, bypassing the in-process cache — used by the
+ * Socket.IO server (a separate module instance from the Next.js API routes) so a
+ * staff member's station changes take effect immediately on their next
+ * (re)connect instead of after the cache TTL.
+ */
+export async function getAssignmentsFresh(uid: string): Promise<string[]> {
+  const map = await loadAll();
   return map[uid] ?? [];
 }
 
