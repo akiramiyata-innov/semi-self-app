@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { io, Socket } from "socket.io-client";
-import { Wifi, WifiOff, Monitor, Mic, ClipboardList, Users, ChevronDown, Mail, LogOut, MapPin, KeyRound, BookOpen } from "lucide-react";
+import { Wifi, WifiOff, Monitor, Mic, ClipboardList, Users, ChevronDown, Mail, LogOut, MapPin, KeyRound, BookOpen, Map as MapIcon } from "lucide-react";
 import { CallQueueItem } from "@/components/CallQueueItem";
 import { ActiveCallPanel } from "@/components/ActiveCallPanel";
 import { Toast } from "@/components/Toast";
@@ -41,6 +41,11 @@ const KIOSK_MACHINES = [
   { id: "kiosk-2", name: "券売機2番" },
   { id: "kiosk-3", name: "精算機1番" },
 ];
+
+// メニュー有効フラグ（false = 表示はするがクリック不可・薄いグレー、true = 通常リンク）
+// 後で戻すときは true に変更するだけ
+const CALL_LOGS_ENABLED = false;      // 通話ログ
+const GLOSSARY_ADMIN_ENABLED = false; // 用語集管理
 
 let entryCounter = 0;
 function makeId() { return `s-${Date.now()}-${entryCounter++}`; }
@@ -775,13 +780,22 @@ export default function StaffPage() {
                       >
                         <Mic size={15} className="text-gray-400" /> マイク許可確認
                       </button>
-                      <Link
-                        href="/logs"
-                        onClick={() => setShowAccountMenu(false)}
-                        className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-                      >
-                        <ClipboardList size={15} className="text-gray-400" /> 通話ログ
-                      </Link>
+                      {CALL_LOGS_ENABLED ? (
+                        <Link
+                          href="/logs"
+                          onClick={() => setShowAccountMenu(false)}
+                          className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                        >
+                          <ClipboardList size={15} className="text-gray-400" /> 通話ログ
+                        </Link>
+                      ) : (
+                        <div
+                          className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-300 cursor-not-allowed select-none"
+                          title="現在ご利用いただけません"
+                        >
+                          <ClipboardList size={15} className="text-gray-300" /> 通話ログ
+                        </div>
+                      )}
                       <button
                         onClick={() => { setShowSettings(true); setShowPwForm(false); setShowAccountMenu(false); }}
                         className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
@@ -806,12 +820,28 @@ export default function StaffPage() {
                             <Users size={15} className="text-gray-400" /> スタッフ管理
                           </Link>
                           <Link
-                            href="/admin/glossary"
+                            href="/admin/stations"
                             onClick={() => setShowAccountMenu(false)}
                             className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
                           >
-                            <BookOpen size={15} className="text-gray-400" /> 用語集管理
+                            <MapIcon size={15} className="text-gray-400" /> 駅マスター登録
                           </Link>
+                          {GLOSSARY_ADMIN_ENABLED ? (
+                            <Link
+                              href="/admin/glossary"
+                              onClick={() => setShowAccountMenu(false)}
+                              className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                            >
+                              <BookOpen size={15} className="text-gray-400" /> 用語集管理
+                            </Link>
+                          ) : (
+                            <div
+                              className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-300 cursor-not-allowed select-none"
+                              title="現在ご利用いただけません"
+                            >
+                              <BookOpen size={15} className="text-gray-300" /> 用語集管理
+                            </div>
+                          )}
                         </>
                       )}
                       <div className="my-1 border-t border-gray-100" />

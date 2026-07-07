@@ -200,9 +200,6 @@ export default function AdminStaffPage() {
             <button onClick={() => router.push("/admin/stations")} className="px-3 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100">
               駅マスター
             </button>
-            <button onClick={() => router.push("/admin/glossary")} className="px-3 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100">
-              用語集
-            </button>
             <button onClick={() => router.push("/staff")} className="px-3 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100">
               スタッフ画面
             </button>
