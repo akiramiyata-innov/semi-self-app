@@ -100,16 +100,26 @@ async function saveSessionLog(session: ActiveSession): Promise<void> {
 }
 
 // ── Staff eligibility ─────────────────────────────────────────────────────────
-// Staff who would see this station's incoming call card (not away, no station
-// restriction or explicitly assigned to it). Reused for both call:incoming and
-// the pre-answer face-camera preview so a staff member never receives video for
-// a call they can't see/take.
+// A staff is assigned to a station if they have no station restriction (empty list)
+// or the station is explicitly in their list. Empty stationId means "no station
+// context" and matches everyone.
+function isStaffAssignedToStation(staff: StaffRecord, stationId: string): boolean {
+  if (!stationId) return true;
+  return staff.assignedStations.length === 0 || staff.assignedStations.includes(stationId);
+}
+
+// Whether a staff should see/receive this station's incoming call (not away AND
+// assigned). Single source of truth reused by call:incoming, the pre-answer
+// face-camera preview, and the staff:join queue replay, so a staff never sees or
+// receives video for a call outside their station.
+function isStaffEligible(staff: StaffRecord, stationId: string): boolean {
+  return staff.status !== "away" && isStaffAssignedToStation(staff, stationId);
+}
+
 function getEligibleStaffSocketIds(stationId: string): string[] {
   const ids: string[] = [];
   staffMap.forEach((staff) => {
-    if (staff.status === "away") return;
-    if (stationId && staff.assignedStations.length > 0 && !staff.assignedStations.includes(stationId)) return;
-    ids.push(staff.socketId);
+    if (isStaffEligible(staff, stationId)) ids.push(staff.socketId);
   });
   return ids;
 }
@@ -252,8 +262,12 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
       socket.join("call-queue");
 
-      // Send current queue to this staff
+      // Replay the current queue to this staff — but only calls they are eligible
+      // for, so station routing is enforced on reconnect/reload, not just at
+      // call:request time.
+      const joined = staffMap.get(socket.id);
       callQueue.forEach((call) => {
+        if (!joined || !isStaffEligible(joined, call.stationId)) return;
         socket.emit("call:incoming", {
           sessionId: call.sessionId,
           machineId: call.machineId,
@@ -330,6 +344,15 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
       if (!record) {
         // Race condition: another staff already answered
+        socket.emit("call:alreadyTaken", { sessionId });
+        return;
+      }
+
+      // Reject answers for stations this staff is not assigned to (guards the brief
+      // fail-open window before a reconnecting staff's assignments load). The client
+      // rolls back its optimistic session on call:alreadyTaken.
+      const answerer = staffMap.get(socket.id);
+      if (answerer && !isStaffAssignedToStation(answerer, record.stationId)) {
         socket.emit("call:alreadyTaken", { sessionId });
         return;
       }

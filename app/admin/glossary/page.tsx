@@ -77,7 +77,8 @@ export default function GlossaryPage() {
       const buffer = await file.arrayBuffer();
       const wb = XLSX.read(buffer, { type: "array" });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json<Record<string, string>>(ws, { defval: "" });
+      // raw: false → 数値・日付セルも整形済み文字列で返す（後段の .trim() が number で落ちるのを防ぐ）
+      const rows = XLSX.utils.sheet_to_json<Record<string, string>>(ws, { defval: "", raw: false });
 
       const terms = rows.map((row) => {
         const normalize = (keys: string[]) =>

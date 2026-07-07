@@ -141,10 +141,16 @@ export default function StaffPage() {
     });
   }, []);
 
-  // ソケット接続済み かつ 初期データ取得完了 → 担当駅をサーバーへ送信
+  // ソケット接続済み かつ 初期データ取得完了 → staff:join を送信。
+  // 担当駅が読み込まれる前に空配列で登録して「全駅対応(=制限なし)」扱いになる
+  // フェイルオープンを防ぐため、初期データが揃うまで登録しない（再接続時もここで再登録）。
   useEffect(() => {
     if (!connected || !initialDataLoaded) return;
-    socketRef.current?.emit("staff:updateStations", { stationIds: myStationIdsRef.current });
+    socketRef.current?.emit("staff:join", {
+      name: staffNameRef.current || "スタッフ",
+      uid: uidRef.current,
+      stationIds: myStationIdsRef.current,
+    });
   }, [connected, initialDataLoaded]);
 
   // S5: periodic session expiry check (every 5 minutes)
@@ -170,7 +176,7 @@ export default function StaffPage() {
     sessionStorage.setItem("staffName", name);
     staffNameRef.current = name;
     setStaffName(name);
-    socketRef.current?.emit("staff:join", { name, uid: sessionInfo?.uid ?? "" });
+    socketRef.current?.emit("staff:join", { name, uid: sessionInfo?.uid ?? "", stationIds: myStationIdsRef.current });
   }, [nameInput, sessionInfo]);
 
   const saveMyStations = useCallback(async () => {
@@ -288,12 +294,9 @@ export default function StaffPage() {
     socketRef.current = s;
 
     s.on("connect", () => {
+      // staff:join is emitted by the initialDataLoaded effect (not here), so we
+      // never register with an empty station list before assignments have loaded.
       setConnected(true);
-      s.emit("staff:join", {
-        name: staffNameRef.current || "スタッフ",
-        uid: uidRef.current,
-        stationIds: myStationIdsRef.current,
-      });
     });
     s.on("disconnect", () => setConnected(false));
 
