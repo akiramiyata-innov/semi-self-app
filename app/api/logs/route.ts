@@ -1,12 +1,17 @@
 import fs from "fs";
 import path from "path";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import type { SessionLog, SessionSummary } from "@/lib/types";
 import { isGCSEnabled, listLogs } from "@/lib/gcsClient";
+import { getSessionFromRequest } from "@/lib/session";
 
 const LOGS_DIR = path.join(process.cwd(), "logs");
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  if (!await getSessionFromRequest(req)) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   if (isGCSEnabled()) {
     try {
       const sessions = await listLogs();

@@ -1,4 +1,5 @@
 import { SignJWT, jwtVerify } from "jose";
+import type { NextRequest } from "next/server";
 
 export interface SessionPayload {
   uid: string;
@@ -38,4 +39,11 @@ export async function verifySessionToken(token: string): Promise<SessionPayload 
   } catch {
     return null;
   }
+}
+
+/** Returns the logged-in staff session for a request, or null if not authenticated. */
+export async function getSessionFromRequest(req: NextRequest): Promise<SessionPayload | null> {
+  const token = req.cookies.get(SESSION_COOKIE_NAME)?.value;
+  if (!token) return null;
+  return verifySessionToken(token);
 }

@@ -303,8 +303,36 @@ export default function StaffPage() {
       if (me) setMyStatus(me.status);
     });
 
-    s.on("call:alreadyTaken", () => {
+    s.on("call:alreadyTaken", (payload: { sessionId: string }) => {
       addToast("別のスタッフが先に応答しました", "warning");
+      // Roll back the optimistic session answerCall created, otherwise this staff
+      // keeps a live ghost panel for a call another staff owns (their mic/text
+      // would reach the customer). Mirror the call:ended cleanup.
+      const { sessionId } = payload;
+      setActiveSessions((prev) => {
+        if (!prev.has(sessionId)) return prev;
+        const next = new Map(prev);
+        next.delete(sessionId);
+        return next;
+      });
+      setPreviewFaceFrames((prev) => {
+        if (!prev.has(sessionId)) return prev;
+        const next = new Map(prev);
+        next.delete(sessionId);
+        return next;
+      });
+      if (activeListeningSession.current === sessionId) {
+        stopMic();
+        activeListeningSession.current = null;
+        setActiveListeningId(null);
+        micOnRef.current = false;
+      }
+      if (captureSessionRef.current === sessionId) {
+        stopCapture();
+        captureSessionRef.current = null;
+      }
+      // myStatus reverts to "available" automatically once activeSessions empties
+      // (see the activeSessions.size effect) and is confirmed by staff:list.
     });
 
     // S1: user's connection dropped unexpectedly

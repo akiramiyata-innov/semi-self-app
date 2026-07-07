@@ -374,6 +374,9 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     socket.on("call:end", async (payload: { sessionId: string }) => {
       const { sessionId } = payload;
       const session = activeSessions.get(sessionId);
+      // Only the staff who owns an active session may end it — prevents a race-losing
+      // staff's 終了 from tearing down the winning staff's live call.
+      if (session && session.staffSocketId !== socket.id) return;
       if (session) {
         await saveSessionLog(session);
         releaseSession(sessionId, session.staffSocketId);
@@ -428,6 +431,9 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         const { sessionId, text, isFinal } = payload;
         const session = activeSessions.get(sessionId);
         if (!session) return;
+        // Only the staff who owns this session may speak into it — guards against a
+        // staff who lost an answer race (or a stale client) leaking audio into the call.
+        if (session.staffSocketId !== socket.id) return;
 
         const userLang = session.userLang;
         let translatedText: string | undefined;

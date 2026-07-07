@@ -261,13 +261,33 @@ export function UserScreen({ machineId, machineName, stationId = "" }: UserScree
     };
   }, []);
 
+  // Clears all per-call state (transcript, session, staff frame/audio, mic).
+  // Used whenever a call ends or the kiosk returns to a neutral screen, so the
+  // next customer never inherits the previous conversation on a shared kiosk.
+  const resetCallState = useCallback(() => {
+    stopMic();
+    micOnRef.current = false;
+    setTranscript([]);
+    setInterimUser("");
+    setInterimStaff("");
+    setSessionId(null);
+    sessionIdRef.current = null;
+    setStaffScreenFrame(null);
+    setLatestAudio(undefined);
+    setLatestStaffText("");
+  }, [stopMic]);
+
   // Socket.IO setup
   useEffect(() => {
     const s = io({ path: "/socket.io", transports: ["websocket", "polling"] });
     socketRef.current = s;
     s.on("connect", () => {
       setConnected(true);
-      // After reconnect, any ongoing session is gone on the server — go back to idle
+      // On (re)connect the server has no session for this fresh socket, so any
+      // ongoing call is gone. Wipe the previous conversation (safe/no-op when
+      // idle) so the next customer on a shared kiosk never inherits it, then
+      // return to idle if we were mid-call.
+      resetCallState();
       setPhase((prev) => (prev === "in-call" || prev === "calling" || prev === "disconnected") ? "idle" : prev);
     });
     s.on("disconnect", () => {
@@ -309,13 +329,7 @@ export function UserScreen({ machineId, machineName, stationId = "" }: UserScree
       micOnRef.current = false;
       setTimeout(() => {
         setPhase("idle");
-        setTranscript([]);
-        setSessionId(null);
-        sessionIdRef.current = null;
-        setStaffScreenFrame(null);
-        setLatestAudio(undefined);
-        setLatestStaffText("");
-        setInterimStaff("");
+        resetCallState();
       }, 5000);
     });
 
@@ -326,13 +340,7 @@ export function UserScreen({ machineId, machineName, stationId = "" }: UserScree
       // Return to lang-select after 3 seconds
       setTimeout(() => {
         setPhase("lang-select");
-        setTranscript([]);
-        setSessionId(null);
-        sessionIdRef.current = null;
-        setStaffScreenFrame(null);
-        setLatestAudio(undefined);
-        setLatestStaffText("");
-        setInterimStaff("");
+        resetCallState();
       }, 3000);
     });
 
