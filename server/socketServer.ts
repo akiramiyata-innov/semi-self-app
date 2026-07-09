@@ -397,9 +397,10 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     socket.on("call:end", async (payload: { sessionId: string }) => {
       const { sessionId } = payload;
       const session = activeSessions.get(sessionId);
-      // Only the staff who owns an active session may end it — prevents a race-losing
-      // staff's 終了 from tearing down the winning staff's live call.
-      if (session && session.staffSocketId !== socket.id) return;
+      // Only a participant of this session may end it — the owning staff (終了ボタン) or
+      // the kiosk user (キャンセルボタン). Blocks a race-losing *other* staff from tearing
+      // down someone else's live call, without blocking the legitimate participants.
+      if (session && session.staffSocketId !== socket.id && session.userSocketId !== socket.id) return;
       if (session) {
         await saveSessionLog(session);
         releaseSession(sessionId, session.staffSocketId);

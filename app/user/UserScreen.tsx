@@ -106,8 +106,19 @@ export function UserScreen({ machineId, machineName, stationId = "" }: UserScree
       const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       tmp.getTracks().forEach((t) => t.stop());
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const cams = devices.filter((d) => d.kind === "videoinput");
-      cameraDevicesRef.current = { face: cams[0]?.deviceId, hand: cams[1]?.deviceId };
+      // enumerateDevices() の並び順はブラウザ依存で、Chrome と Edge で逆になる（＝正面/手元が
+      // 入れ替わる原因）。deviceId はブラウザごとにハッシュ化され使えないが、label は
+      // ブラウザをまたいで同一（USBの vendor:product 等を含む）なので、label 昇順でソートして
+      // どのブラウザでも同じ物理カメラが 1番目(正面)/2番目(手元) になるよう固定する。
+      const cams = devices
+        .filter((d) => d.kind === "videoinput")
+        .sort((a, b) => a.label.localeCompare(b.label));
+      // 設置の都合で正面/手元を入れ替えたい場合は、キオスクURLに ?swapcam=1 を付ける。
+      const swap = new URLSearchParams(window.location.search).get("swapcam") === "1";
+      const faceCam = swap ? cams[1] : cams[0];
+      const handCam = swap ? cams[0] : cams[1];
+      console.log(`[camera] 正面=${faceCam?.label ?? "なし"} / 手元=${handCam?.label ?? "なし"}${swap ? "（swapcam=1で入替）" : ""}`);
+      cameraDevicesRef.current = { face: faceCam?.deviceId, hand: handCam?.deviceId };
     } catch (e) {
       console.error("[camera] device enumeration failed:", e);
       cameraDevicesRef.current = {};
