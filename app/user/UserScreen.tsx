@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import { PhoneCall, PhoneOff, Mic, X } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
+import { KioskHeader } from "@/components/KioskHeader";
 import { ScreenShareView } from "@/components/ScreenShareView";
 import { SUPPORTED_LANGS } from "@/lib/languages";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
@@ -28,13 +29,31 @@ const ERR: Record<string, { noStaff: string; noStaffSub: string; disconnected: s
 let entryCounter = 0;
 function makeId() { return `e-${Date.now()}-${entryCounter++}`; }
 
+// 通話中画面の背景：淡い水色のドット地 + 左端の縦帯
+const DOT_BACKGROUND = {
+  backgroundColor: "#e2f7fa",
+  backgroundImage: "radial-gradient(circle, #a3dbe7 1.1px, transparent 1.3px)",
+  backgroundSize: "6px 6px",
+} as const;
+
+const LEFT_STRIPE = {
+  background: "linear-gradient(180deg, #12b5e5 0%, #7ad8f0 30%, #d3f1fb 70%, #e2f7fa 100%)",
+} as const;
+
+const CANCEL_BUTTON = {
+  background: "linear-gradient(180deg, #e9dff6 0%, #c8b2e4 100%)",
+} as const;
+
 interface UserScreenProps {
   machineId: string;
   machineName: string;
   stationId?: string;
+  line?: string;
+  stationName?: string;
+  stationCode?: string;
 }
 
-export function UserScreen({ machineId, machineName, stationId = "" }: UserScreenProps) {
+export function UserScreen({ machineId, machineName, stationId = "", line, stationName, stationCode }: UserScreenProps) {
   const socketRef = useRef<Socket | null>(null);
   const [connected, setConnected] = useState(false);
   const [phase, setPhase] = useState<Phase>("lang-select");
@@ -571,16 +590,22 @@ export function UserScreen({ machineId, machineName, stationId = "" }: UserScree
 
   // --- In-Call ---
   return (
-    <div
-      className="h-screen flex overflow-hidden"
-      style={{ background: "linear-gradient(180deg, #c5e9f8 0%, #9dd4ef 100%)" }}
-    >
-      {/* LEFT: title + chat + controls */}
-      <div className="flex flex-col w-[58%] px-8 pt-8 pb-6 overflow-hidden">
-        <h1 className="text-4xl font-bold text-gray-800 mb-5 shrink-0">
+    <div className="h-screen flex flex-col overflow-hidden relative" style={DOT_BACKGROUND}>
+      {/* 左端の縦帯（ヘッダーより手前に重ねる） */}
+      <div className="absolute left-0 top-0 bottom-0 w-2.5 z-20 pointer-events-none" style={LEFT_STRIPE} />
+
+      <KioskHeader line={line} stationName={stationName} stationCode={stationCode} />
+
+      {/* 見出し（下に全幅の区切り線） */}
+      <div className="shrink-0 px-28 pt-8 pb-6 border-b border-[#7fd0e4]">
+        <h1 className="text-[44px] leading-none font-bold text-gray-900">
           ご用件をお伺いします。
         </h1>
+      </div>
 
+      <div className="flex-1 flex overflow-hidden">
+      {/* LEFT: chat + controls */}
+      <div className="flex flex-col w-[58%] px-28 pt-6 pb-8 overflow-hidden">
         {/* Chat bubbles */}
         <div className="flex-1 overflow-y-auto flex flex-col gap-4 pr-1">
           {transcript.map((entry) => (
@@ -609,9 +634,12 @@ export function UserScreen({ machineId, machineName, stationId = "" }: UserScree
         <div className="flex items-center gap-4 mt-6 shrink-0">
           <button
             onClick={endCall}
-            className="flex items-center gap-2 px-7 py-4 bg-pink-400 hover:bg-pink-500 active:scale-95 text-white rounded-full text-xl font-semibold shadow-lg transition-all shrink-0"
+            style={CANCEL_BUTTON}
+            className="flex items-center gap-4 py-2.5 pl-2.5 pr-9 active:scale-95 text-[#6b4c9a] rounded-full text-3xl font-bold shadow-lg ring-[6px] ring-white/80 transition-all shrink-0"
           >
-            <X size={24} />
+            <span className="flex items-center justify-center w-14 h-14 rounded-full bg-[#8b5cf6] shrink-0">
+              <X size={30} strokeWidth={3} className="text-white" />
+            </span>
             キャンセル
           </button>
 
@@ -649,7 +677,7 @@ export function UserScreen({ machineId, machineName, stationId = "" }: UserScree
       </div>
 
       {/* RIGHT: Screen share (when active) + Avatar */}
-      <div className="w-[42%] flex flex-col bg-white/20">
+      <div className="w-[42%] flex flex-col">
         {staffScreenFrame && (
           <div className="p-4 pb-2 shrink-0">
             <ScreenShareView
@@ -669,6 +697,7 @@ export function UserScreen({ machineId, machineName, stationId = "" }: UserScree
             size="xl"
           />
         </div>
+      </div>
       </div>
     </div>
   );
