@@ -56,10 +56,27 @@ class ServiceAccountCredential implements Credential {
   }
 }
 
+// FIREBASE_PRIVATE_KEY を、どの保存形式でも確実にPEMへ正規化する。
+// 対応: 前後クォート付き / \n・\r\n エスケープ / 実改行 / base64エンコード。
+// （Railway等では貼り付け時に改行やクォートの扱いがずれて鍵が壊れることがあるため、
+//   base64で渡せばエスケープ事故を完全に回避できる。）
+function loadPrivateKey(raw: string): string {
+  let k = (raw ?? "").trim();
+  if (k.length >= 2 && ((k.startsWith('"') && k.endsWith('"')) || (k.startsWith("'") && k.endsWith("'")))) {
+    k = k.slice(1, -1);
+  }
+  if (!k.includes("BEGIN")) {
+    try {
+      const decoded = Buffer.from(k, "base64").toString("utf8");
+      if (decoded.includes("BEGIN")) k = decoded;
+    } catch { /* base64ではない → そのまま */ }
+  }
+  return k.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n");
+}
+
 if (getApps().length === 0) {
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL ?? "";
-  const rawKey = process.env.FIREBASE_PRIVATE_KEY ?? "";
-  const privateKey = (rawKey.startsWith('"') ? rawKey.slice(1, -1) : rawKey).replace(/\\n/g, "\n");
+  const privateKey = loadPrivateKey(process.env.FIREBASE_PRIVATE_KEY ?? "");
 
   initializeApp({
     credential: new ServiceAccountCredential(clientEmail, privateKey),

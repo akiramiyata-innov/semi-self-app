@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.8.1] - 2026-07-10
+
+### 修正
+- 本番でスタッフ追加時に `Credential ... Invalid character`（Firebase秘密鍵の読み込み失敗）を修正
+  - 原因：Railwayに保存した `FIREBASE_PRIVATE_KEY` の改行/クォートのエスケープがローカルと異なり、鍵が壊れていた
+  - 対策：`lib/firebase-admin.ts` の鍵正規化を堅牢化（前後クォート除去・`\n`/`\r\n`エスケープ・**base64**のいずれの形式でも読める）
+  - 運用：Railwayの `FIREBASE_PRIVATE_KEY` はエスケープ事故の起きない base64 形式で設定する
+
 ## [1.8.0] - 2026-07-10
 
 ### 追加・変更（スタッフ権限管理の刷新）
