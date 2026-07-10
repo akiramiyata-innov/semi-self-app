@@ -687,7 +687,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             />
           </div>
         )}
-        <div className="flex-1 flex items-end justify-center">
+        <div className="flex-1 min-h-0 flex items-end justify-center pb-2">
           <Avatar
             audioBase64={latestAudio}
             fallbackText={latestStaffText}

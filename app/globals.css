@@ -29,11 +29,6 @@ body {
   95% { transform: scaleY(0.1); }
 }
 
-@keyframes talking {
-  0%, 100% { d: path("M 40 65 Q 50 68 60 65"); }
-  50% { d: path("M 40 65 Q 50 75 60 65"); }
-}
-
 @keyframes entrance {
   0% { opacity: 0; transform: scale(0.5) translateY(30px); }
   60% { transform: scale(1.08) translateY(-5px); }
@@ -57,10 +52,6 @@ body {
 
 .avatar-entrance {
   animation: entrance 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-}
-
-.avatar-talking .mouth-path {
-  animation: talking 0.18s ease-in-out infinite alternate;
 }
 
 .call-queue-item {

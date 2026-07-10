@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { LangCode } from "@/lib/socketEvents";
 import { getLang } from "@/lib/languages";
 
@@ -20,7 +20,49 @@ interface AvatarProps {
   size?: "sm" | "md" | "lg" | "xl";
 }
 
-const SIZE_MAP = { sm: 120, md: 200, lg: 280, xl: 480 };
+/** Height in px. Width follows from the artwork's aspect ratio. */
+const SIZE_MAP = { sm: 220, md: 380, lg: 560, xl: 860 };
+
+// base.svg's viewBox. The mouth artwork uses the same units, so mouth placement
+// is expressed as a percentage of these dimensions.
+const BASE_W = 805.1;
+const BASE_H = 1448;
+
+/** Mouth anchor on the face, in base.svg units (centre-x, top edge of the lips). */
+const MOUTH_CENTER_X = 406;
+const MOUTH_TOP_Y = 600;
+
+/** Each mouth SVG's own viewBox width, in the same units as base.svg. */
+const MOUTH_WIDTH: Record<MouthShape, number> = {
+  closed: 86.2,
+  a: 77,
+  i: 94.3,
+  u: 36.9,
+  e: 79.9,
+  o: 41,
+};
+
+type MouthShape = "closed" | "a" | "i" | "u" | "e" | "o";
+
+/** How often the mouth is re-evaluated while speaking. */
+const MOUTH_TICK_MS = 60;
+
+/**
+ * Loudness → how far the mouth opens. Thresholds are RMS of the playing audio
+ * (0–1), tuned against Google TTS output: its speech sits around 0.10 RMS with
+ * peaks near 0.19, so these bands keep the mouth moving instead of parked on "a".
+ * Language-agnostic, so it works for all eight supported languages.
+ * The `i` and `e` shapes stay unused here — they need phoneme data, not volume.
+ */
+function mouthForLevel(rms: number): MouthShape {
+  if (rms < 0.02) return "closed";
+  if (rms < 0.06) return "u";
+  if (rms < 0.12) return "o";
+  return "a";
+}
+
+/** Shapes cycled when we can't measure the audio (Web Speech Synthesis fallback). */
+const FALLBACK_CYCLE: MouthShape[] = ["a", "o", "u", "a", "closed", "o", "a", "u"];
 
 export function Avatar({
   audioBase64,
@@ -33,9 +75,13 @@ export function Avatar({
 }: AvatarProps) {
   const [speaking, setSpeaking] = useState(false);
   const [entered, setEntered] = useState(false);
+  const [mouth, setMouth] = useState<MouthShape>("closed");
   const audioCtxRef = useRef<AudioContext | null>(null);
   const onSpeakingRef = useRef(onSpeakingChange);
-  const dim = SIZE_MAP[size];
+  // Drives the mouth while speaking. A timer, not requestAnimationFrame: rAF is
+  // suspended whenever the page isn't painting, which freezes the mouth mid-word.
+  const mouthTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const height = SIZE_MAP[size];
 
   useEffect(() => { onSpeakingRef.current = onSpeakingChange; }, [onSpeakingChange]);
 
@@ -47,6 +93,23 @@ export function Avatar({
       setEntered(false);
     }
   }, [visible]);
+
+  const stopMouth = useCallback(() => {
+    if (mouthTimerRef.current) { clearInterval(mouthTimerRef.current); mouthTimerRef.current = null; }
+    setMouth("closed");
+  }, []);
+
+  // Web Speech Synthesis gives no audio node to measure, so cycle shapes on a timer.
+  const startMouthCycle = useCallback(() => {
+    stopMouth();
+    let i = 0;
+    mouthTimerRef.current = setInterval(() => {
+      setMouth(FALLBACK_CYCLE[i % FALLBACK_CYCLE.length]);
+      i++;
+    }, 130);
+  }, [stopMouth]);
+
+  useEffect(() => stopMouth, [stopMouth]);
 
   // Shared ref: pending fallback timer (cleared when tts:audio arrives)
   const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -69,6 +132,7 @@ export function Avatar({
     const stopSpeaking = () => {
       setSpeaking(false);
       onSpeakingRef.current?.(false);
+      stopMouth();
     };
 
     let ctx = audioCtxRef.current;
@@ -88,19 +152,39 @@ export function Avatar({
         ctx!.decodeAudioData(bytes.buffer.slice(0), (buffer) => {
           const source = ctx!.createBufferSource();
           source.buffer = buffer;
-          source.connect(ctx!.destination);
+
+          const analyser = ctx!.createAnalyser();
+          analyser.fftSize = 1024;
+          const samples = new Uint8Array(analyser.fftSize);
+          source.connect(analyser);
+          analyser.connect(ctx!.destination);
+
           source.onended = stopSpeaking;
           startSpeaking();
           source.start();
+
+          stopMouth();
+          mouthTimerRef.current = setInterval(() => {
+            analyser.getByteTimeDomainData(samples);
+            let sum = 0;
+            for (let i = 0; i < samples.length; i++) {
+              const v = (samples[i] - 128) / 128;
+              sum += v * v;
+            }
+            const next = mouthForLevel(Math.sqrt(sum / samples.length));
+            setMouth((prev) => (prev === next ? prev : next));
+          }, MOUTH_TICK_MS);
         }, () => {
           // decodeAudioData failed — use Web Speech as last resort
           if (fallbackTextRef.current) {
-            speakWithSynthesis(fallbackTextRef.current, fallbackLangRef.current ?? "ja", startSpeaking, stopSpeaking);
+            speakWithSynthesis(fallbackTextRef.current, fallbackLangRef.current ?? "ja",
+              () => { startSpeaking(); startMouthCycle(); }, stopSpeaking);
           }
         });
       } catch {
         if (fallbackTextRef.current) {
-          speakWithSynthesis(fallbackTextRef.current, fallbackLangRef.current ?? "ja", startSpeaking, stopSpeaking);
+          speakWithSynthesis(fallbackTextRef.current, fallbackLangRef.current ?? "ja",
+            () => { startSpeaking(); startMouthCycle(); }, stopSpeaking);
         }
       }
     };
@@ -128,8 +212,8 @@ export function Avatar({
       fallbackTimerRef.current = null;
       const text = fallbackTextRef.current;
       if (!text) return; // tts:audio arrived and cleared fallbackText → skip
-      const onStart = () => { setSpeaking(true); onSpeakingRef.current?.(true); };
-      const onEnd = () => { setSpeaking(false); onSpeakingRef.current?.(false); };
+      const onStart = () => { setSpeaking(true); onSpeakingRef.current?.(true); startMouthCycle(); };
+      const onEnd = () => { setSpeaking(false); onSpeakingRef.current?.(false); stopMouth(); };
       speakWithSynthesis(text, fallbackLangRef.current ?? "ja", onStart, onEnd);
     }, 2000); // 2s grace period for tts:audio to arrive
 
@@ -147,71 +231,37 @@ export function Avatar({
   const containerClass = [
     "avatar-container",
     entered ? "avatar-entrance" : "opacity-0",
-    speaking ? "avatar-talking" : "",
-  ].filter(Boolean).join(" ");
+  ].join(" ");
 
   return (
-    <div className="flex flex-col items-center gap-3">
-      <div className={containerClass} style={{ width: dim, height: dim }}>
-        <svg
-          width={dim}
-          height={dim}
-          viewBox="0 0 100 100"
-          xmlns="http://www.w3.org/2000/svg"
-          aria-label="駅員アバター"
-        >
-          {/* Body / uniform */}
-          <rect x="25" y="55" width="50" height="40" rx="5" fill="#1e3a5f" />
-          {/* White shirt collar */}
-          <polygon points="50,55 42,70 50,65 58,70" fill="white" />
-          {/* Tie */}
-          <polygon points="50,65 47,80 50,82 53,80" fill="#c0392b" />
-          {/* Head */}
-          <ellipse cx="50" cy="38" rx="20" ry="22" fill="#f5cba7" />
-          {/* Cap crown — covers top of head */}
-          <rect x="29" y="8" width="42" height="16" rx="5" fill="#1e3a5f" />
-          {/* Cap brim */}
-          <rect x="28" y="20" width="44" height="6" rx="3" fill="#1e3a5f" />
-          <rect x="22" y="23" width="56" height="4" rx="2" fill="#1e3a5f" />
-          {/* Cap badge */}
-          <circle cx="50" cy="14" r="3" fill="#f1c40f" />
-          {/* Eyes */}
-          <ellipse cx="42" cy="38" rx="3.5" ry="3.5" fill="white" />
-          <ellipse cx="58" cy="38" rx="3.5" ry="3.5" fill="white" />
-          <circle cx="43" cy="38" r="2" fill="#2c3e50" />
-          <circle cx="59" cy="38" r="2" fill="#2c3e50" />
-          <circle cx="43.8" cy="37.2" r="0.8" fill="white" />
-          <circle cx="59.8" cy="37.2" r="0.8" fill="white" />
-          {/* Eyebrows */}
-          <path d="M 38.5 33.5 Q 42 32 45.5 33.5" stroke="#5d4037" strokeWidth="1.2" fill="none" strokeLinecap="round" />
-          <path d="M 54.5 33.5 Q 58 32 61.5 33.5" stroke="#5d4037" strokeWidth="1.2" fill="none" strokeLinecap="round" />
-          {/* Nose */}
-          <ellipse cx="50" cy="43" rx="1.5" ry="1" fill="#e8a87c" />
-          {/* Mouth */}
-          {speaking ? (
-            <ellipse cx="50" cy="50" rx="6" ry="4" fill="#c0392b" />
-          ) : (
-            <path
-              className="mouth-path"
-              d="M 44 49 Q 50 53 56 49"
-              stroke="#c0392b"
-              strokeWidth="1.5"
-              fill="none"
-              strokeLinecap="round"
-            />
-          )}
-          {/* Ears */}
-          <ellipse cx="30" cy="40" rx="3" ry="4" fill="#f5cba7" />
-          <ellipse cx="70" cy="40" rx="3" ry="4" fill="#f5cba7" />
-          {/* Arms */}
-          <rect x="10" y="58" width="17" height="8" rx="4" fill="#1e3a5f" />
-          <rect x="73" y="58" width="17" height="8" rx="4" fill="#1e3a5f" />
-          {/* Hands */}
-          <circle cx="10" cy="62" r="5" fill="#f5cba7" />
-          <circle cx="90" cy="62" r="5" fill="#f5cba7" />
-        </svg>
+    <div className="flex flex-col items-center justify-end gap-3 h-full min-h-0">
+      <div
+        className={`${containerClass} relative min-h-0 flex-1 w-auto`}
+        style={{ maxHeight: height, aspectRatio: `${BASE_W} / ${BASE_H}` }}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/avatar/base.svg"
+          alt="駅員アバター"
+          className="w-full h-full select-none"
+          draggable={false}
+        />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={`/avatar/mouth-${mouth}.svg`}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          className="absolute select-none"
+          style={{
+            left: `${(MOUTH_CENTER_X / BASE_W) * 100}%`,
+            top: `${(MOUTH_TOP_Y / BASE_H) * 100}%`,
+            width: `${(MOUTH_WIDTH[mouth] / BASE_W) * 100}%`,
+            transform: "translateX(-50%)",
+          }}
+        />
       </div>
-      <div className="text-center">
+      <div className="text-center shrink-0">
         {speaking ? (
           <span className="inline-flex items-center gap-1.5 text-sm text-blue-600 font-medium">
             <span className="relative flex h-2.5 w-2.5">
