@@ -63,13 +63,10 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   const [interimUser, setInterimUser] = useState("");
   const [interimStaff, setInterimStaff] = useState("");
 
-  // TTS state: prefer Google TTS base64, fallback to Web Speech Synthesis
+  // TTS state: the staff's speech is voiced only by Google TTS (base64 audio).
+  // No browser Web-Speech fallback — that used a device voice (sometimes male),
+  // which broke the consistent female station-attendant voice.
   const [latestAudio, setLatestAudio] = useState<string | undefined>(undefined);
-  const [latestStaffText, setLatestStaffText] = useState<string>("");
-  // Increments each time a new final staff message arrives — even if text is identical.
-  // Passed to Avatar as fallbackKey so Web Speech Synthesis always fires.
-  const [staffSpeechKey, setStaffSpeechKey] = useState<number | undefined>(undefined);
-  const staffSpeechKeyRef = useRef(0);
 
   const [staffScreenFrame, setStaffScreenFrame] = useState<string | null>(null);
   const [inputText, setInputText] = useState("");
@@ -277,7 +274,6 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         sessionIdRef.current = null;
         setStaffScreenFrame(null);
         setLatestAudio(undefined);
-        setLatestStaffText("");
         setInterimStaff("");
       } else {
         // Production env: actually disconnected — force reconnect
@@ -305,7 +301,6 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     sessionIdRef.current = null;
     setStaffScreenFrame(null);
     setLatestAudio(undefined);
-    setLatestStaffText("");
   }, [stopMic]);
 
   // Socket.IO setup
@@ -379,10 +374,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       if (payload.isFinal) {
         setInterimStaff("");
         addEntry({ speaker: "staff", text: payload.text, isFinal: true });
-        setLatestStaffText(payload.text);
         setLatestAudio(undefined);
-        staffSpeechKeyRef.current += 1;
-        setStaffSpeechKey(staffSpeechKeyRef.current);
         lastAvatarTextRef.current = payload.text;
         // Auto-OFF mic when staff speaks — user must press mic button to respond
         stopMic();
@@ -396,8 +388,6 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     s.on("tts:audio", (payload: { audioBase64: string }) => {
       if (payload.audioBase64) {
         setLatestAudio(payload.audioBase64);
-        // Clear fallback text to avoid double-speaking
-        setLatestStaffText("");
       }
     });
 
@@ -690,9 +680,6 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         <div className="flex-1 min-h-0 flex items-end justify-center pb-2">
           <Avatar
             audioBase64={latestAudio}
-            fallbackText={latestStaffText}
-            fallbackKey={staffSpeechKey}
-            fallbackLang={userLang}
             visible
             size="xl"
           />

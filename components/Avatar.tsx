@@ -1,20 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { LangCode } from "@/lib/socketEvents";
-import { getLang } from "@/lib/languages";
 
 interface AvatarProps {
+  /** Google TTS audio (base64 MP3) for the staff's speech. */
   audioBase64?: string;
-  /** Fallback: text to speak via Web Speech Synthesis when audioBase64 is absent */
-  fallbackText?: string;
-  fallbackLang?: LangCode;
-  /**
-   * Increment this counter each time a new staff speech arrives (even same text).
-   * The fallback useEffect depends on this key so it always fires, avoiding
-   * the React "same state value = no re-render" problem.
-   */
-  fallbackKey?: number;
   onSpeakingChange?: (speaking: boolean) => void;
   visible?: boolean;
   size?: "sm" | "md" | "lg" | "xl";
@@ -32,6 +22,8 @@ const BASE_H = 1448;
 const MOUTH_CENTER_X = 406;
 const MOUTH_TOP_Y = 600;
 
+type MouthShape = "closed" | "a" | "i" | "u" | "e" | "o";
+
 /** Each mouth SVG's own viewBox width, in the same units as base.svg. */
 const MOUTH_WIDTH: Record<MouthShape, number> = {
   closed: 86.2,
@@ -41,8 +33,6 @@ const MOUTH_WIDTH: Record<MouthShape, number> = {
   e: 79.9,
   o: 41,
 };
-
-type MouthShape = "closed" | "a" | "i" | "u" | "e" | "o";
 
 /** How often the mouth is re-evaluated while speaking. */
 const MOUTH_TICK_MS = 60;
@@ -61,14 +51,8 @@ function mouthForLevel(rms: number): MouthShape {
   return "a";
 }
 
-/** Shapes cycled when we can't measure the audio (Web Speech Synthesis fallback). */
-const FALLBACK_CYCLE: MouthShape[] = ["a", "o", "u", "a", "closed", "o", "a", "u"];
-
 export function Avatar({
   audioBase64,
-  fallbackText,
-  fallbackLang = "ja",
-  fallbackKey,
   onSpeakingChange,
   visible = true,
   size = "lg",
@@ -77,6 +61,9 @@ export function Avatar({
   const [entered, setEntered] = useState(false);
   const [mouth, setMouth] = useState<MouthShape>("closed");
   const audioCtxRef = useRef<AudioContext | null>(null);
+  // The currently-playing Google TTS node, kept so we can stop it if the call
+  // ends mid-sentence (otherwise the voice plays on after the screen closes).
+  const sourceRef = useRef<AudioBufferSourceNode | null>(null);
   const onSpeakingRef = useRef(onSpeakingChange);
   // Drives the mouth while speaking. A timer, not requestAnimationFrame: rAF is
   // suspended whenever the page isn't painting, which freezes the mouth mid-word.
@@ -99,37 +86,38 @@ export function Avatar({
     setMouth("closed");
   }, []);
 
-  // Web Speech Synthesis gives no audio node to measure, so cycle shapes on a timer.
-  const startMouthCycle = useCallback(() => {
-    stopMouth();
-    let i = 0;
-    mouthTimerRef.current = setInterval(() => {
-      setMouth(FALLBACK_CYCLE[i % FALLBACK_CYCLE.length]);
-      i++;
-    }, 130);
-  }, [stopMouth]);
-
   useEffect(() => stopMouth, [stopMouth]);
 
-  // Shared ref: pending fallback timer (cleared when tts:audio arrives)
-  const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Silence the audio when the avatar unmounts — e.g. the user presses キャンセル
+  // mid-sentence. Without this the Web Audio source keeps playing to the end even
+  // though the call screen has already closed.
+  useEffect(() => {
+    return () => {
+      const src = sourceRef.current;
+      if (src) {
+        src.onended = null; // avoid stopSpeaking firing on the unmounted component
+        try { src.stop(); } catch { /* already stopped */ }
+        sourceRef.current = null;
+      }
+      const ctx = audioCtxRef.current;
+      if (ctx && ctx.state !== "closed") ctx.close().catch(() => {});
+    };
+  }, []);
 
   // --- Play via Web Audio API (Google TTS base64) ---
+  // Google TTS is the only voice — there is deliberately no Web Speech fallback,
+  // which used a device voice (sometimes male) and broke the consistent female
+  // station-attendant voice. If the audio can't play, the avatar stays silent
+  // (the staff's words are still shown as on-screen text).
   useEffect(() => {
     if (!audioBase64) return;
-
-    // Cancel any pending Web Speech fallback — Google TTS takes priority
-    if (fallbackTimerRef.current) {
-      clearTimeout(fallbackTimerRef.current);
-      fallbackTimerRef.current = null;
-    }
-    window.speechSynthesis?.cancel();
 
     const startSpeaking = () => {
       setSpeaking(true);
       onSpeakingRef.current?.(true);
     };
     const stopSpeaking = () => {
+      sourceRef.current = null;
       setSpeaking(false);
       onSpeakingRef.current?.(false);
       stopMouth();
@@ -160,6 +148,7 @@ export function Avatar({
           analyser.connect(ctx!.destination);
 
           source.onended = stopSpeaking;
+          sourceRef.current = source;
           startSpeaking();
           source.start();
 
@@ -174,57 +163,17 @@ export function Avatar({
             const next = mouthForLevel(Math.sqrt(sum / samples.length));
             setMouth((prev) => (prev === next ? prev : next));
           }, MOUTH_TICK_MS);
-        }, () => {
-          // decodeAudioData failed — use Web Speech as last resort
-          if (fallbackTextRef.current) {
-            speakWithSynthesis(fallbackTextRef.current, fallbackLangRef.current ?? "ja",
-              () => { startSpeaking(); startMouthCycle(); }, stopSpeaking);
-          }
+        }, (err) => {
+          console.error("[avatar] audio decode failed:", err);
         });
-      } catch {
-        if (fallbackTextRef.current) {
-          speakWithSynthesis(fallbackTextRef.current, fallbackLangRef.current ?? "ja",
-            () => { startSpeaking(); startMouthCycle(); }, stopSpeaking);
-        }
+      } catch (e) {
+        console.error("[avatar] audio playback failed:", e);
       }
     };
 
     play();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audioBase64]);
-
-  // --- Fallback: Web Speech Synthesis (when tts:audio doesn't arrive) ---
-  // Uses fallbackKey (counter) so same text re-triggers correctly.
-  // Waits 2s before speaking — if tts:audio arrives in that window,
-  // the timer is cancelled and Google TTS plays instead (no double audio).
-  const fallbackTextRef = useRef(fallbackText);
-  const fallbackLangRef = useRef(fallbackLang);
-  useEffect(() => { fallbackTextRef.current = fallbackText; }, [fallbackText]);
-  useEffect(() => { fallbackLangRef.current = fallbackLang; }, [fallbackLang]);
-
-  useEffect(() => {
-    if (fallbackKey === undefined) return;
-
-    // Clear any previous timer before starting a new one
-    if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
-
-    fallbackTimerRef.current = setTimeout(() => {
-      fallbackTimerRef.current = null;
-      const text = fallbackTextRef.current;
-      if (!text) return; // tts:audio arrived and cleared fallbackText → skip
-      const onStart = () => { setSpeaking(true); onSpeakingRef.current?.(true); startMouthCycle(); };
-      const onEnd = () => { setSpeaking(false); onSpeakingRef.current?.(false); stopMouth(); };
-      speakWithSynthesis(text, fallbackLangRef.current ?? "ja", onStart, onEnd);
-    }, 2000); // 2s grace period for tts:audio to arrive
-
-    return () => {
-      if (fallbackTimerRef.current) {
-        clearTimeout(fallbackTimerRef.current);
-        fallbackTimerRef.current = null;
-      }
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fallbackKey]);
 
   if (!visible) return null;
 
@@ -276,27 +225,4 @@ export function Avatar({
       </div>
     </div>
   );
-}
-
-// Helper: speak via Web Speech Synthesis API
-function speakWithSynthesis(
-  text: string,
-  langCode: LangCode,
-  onStart: () => void,
-  onEnd: () => void,
-) {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
-  window.speechSynthesis.cancel();
-
-  const lang = getLang(langCode);
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = lang.bcp47;
-  utterance.rate = 1.0;
-  utterance.pitch = 1.1;
-
-  utterance.onstart = onStart;
-  utterance.onend = onEnd;
-  utterance.onerror = onEnd;
-
-  window.speechSynthesis.speak(utterance);
 }
