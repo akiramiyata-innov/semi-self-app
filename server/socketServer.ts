@@ -197,6 +197,12 @@ async function synthesizeSpeech(text: string, langCode: LangCode): Promise<strin
     return "";
   }
 
+  // Derive the languageCode from the voice name's own locale prefix rather than
+  // lang.bcp47. The Chirp3-HD voices are strict: e.g. cmn-CN-Chirp3-HD-Aoede
+  // rejects "zh-CN" and demands "cmn-CN". (bcp47 stays "zh-CN" for STT / Web
+  // Speech fallback, where that BCP-47 tag is correct.)
+  const voiceLangCode = lang.ttsVoice.split("-").slice(0, 2).join("-");
+
   try {
     const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`;
     const res = await fetch(url, {
@@ -204,8 +210,11 @@ async function synthesizeSpeech(text: string, langCode: LangCode): Promise<strin
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         input: { text },
-        voice: { languageCode: lang.bcp47, name: lang.ttsVoice },
-        audioConfig: { audioEncoding: "MP3" },
+        voice: { languageCode: voiceLangCode, name: lang.ttsVoice },
+        // speakingRate 0.96 = a touch slower for clarity in a noisy station;
+        // volumeGainDb +2 = a little louder over ambient noise. No `pitch` — the
+        // Chirp3-HD voices reject it (returns "does not support pitch").
+        audioConfig: { audioEncoding: "MP3", speakingRate: 0.96, volumeGainDb: 2.0 },
       }),
     });
     const json = await res.json() as { audioContent?: string; error?: { message: string } };
