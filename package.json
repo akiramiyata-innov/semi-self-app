@@ -1,6 +1,6 @@
 {
   "name": "semi-self-app",
-  "version": "1.7.7",
+  "version": "1.8.0",
   "private": true,
   "scripts": {
     "dev": "PORT=3001 tsx server.ts",

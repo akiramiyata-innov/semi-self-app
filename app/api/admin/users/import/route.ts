@@ -6,7 +6,6 @@ interface StaffRow {
   displayName?: string;
   email?: string;
   password?: string;
-  isManager?: boolean;
 }
 
 function normalize(row: Record<string, string>): StaffRow {
@@ -17,12 +16,10 @@ function normalize(row: Record<string, string>): StaffRow {
     }
     return undefined;
   };
-  const managerRaw = get("マネージャー", "isManager", "manager", "Manager");
   return {
     displayName: get("名前", "displayName", "name", "Name", "氏名"),
     email: get("メール", "email", "Email", "メールアドレス"),
     password: get("パスワード", "password", "Password", "仮パスワード"),
-    isManager: managerRaw === "true" || managerRaw === "1" || managerRaw === "○" || managerRaw === "yes",
   };
 }
 
@@ -41,14 +38,11 @@ export async function POST(req: NextRequest) {
       continue;
     }
     try {
-      const user = await adminAuth.createUser({
+      await adminAuth.createUser({
         displayName: row.displayName,
         email: row.email,
         password: row.password,
       });
-      if (row.isManager) {
-        await adminAuth.setCustomUserClaims(user.uid, { isManager: true });
-      }
       results.push({ email: row.email, status: "created" });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "エラー";

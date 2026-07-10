@@ -12,12 +12,13 @@ export async function POST(req: NextRequest) {
       .map((e) => e.trim())
       .filter(Boolean);
 
+    // 管理者判定は「環境変数の固定管理者(非常用)」または「Firebase権限フラグ isAdmin」。
+    // カスタムクレームは検証済みIDトークンの最上位に展開されるため decoded.isAdmin で読む。
     const sessionToken = await createSessionToken({
       uid: decoded.uid,
       email: decoded.email ?? "",
       name: decoded.name ?? decoded.email ?? "",
-      isAdmin: adminEmails.includes(decoded.email ?? ""),
-      isManager: !!(decoded.customClaims?.isManager),
+      isAdmin: adminEmails.includes(decoded.email ?? "") || decoded.isAdmin === true,
     });
 
     const res = NextResponse.json({ ok: true });

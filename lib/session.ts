@@ -6,7 +6,6 @@ export interface SessionPayload {
   email: string;
   name: string;
   isAdmin: boolean;
-  isManager: boolean;
 }
 
 export const SESSION_COOKIE_NAME = "staff-session";

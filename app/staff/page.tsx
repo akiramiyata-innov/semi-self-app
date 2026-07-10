@@ -95,7 +95,7 @@ export default function StaffPage() {
   const [showKioskMenu, setShowKioskMenu] = useState(false);
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const [sessionInfo, setSessionInfo] = useState<{ uid: string; name: string; email: string; isAdmin: boolean; isManager: boolean } | null>(null);
+  const [sessionInfo, setSessionInfo] = useState<{ uid: string; name: string; email: string; isAdmin: boolean } | null>(null);
 
   // 担当駅設定パネル
   const [showSettings, setShowSettings] = useState(false);

@@ -25,12 +25,12 @@ export async function PATCH(
   }
 
   const { uid } = await params;
-  const body = await req.json() as { isManager?: boolean; password?: string; displayName?: string };
+  const body = await req.json() as { isAdmin?: boolean; password?: string; displayName?: string };
 
-  if (typeof body.isManager === "boolean") {
+  if (typeof body.isAdmin === "boolean") {
     const user = await adminAuth.getUser(uid);
     const existing = user.customClaims ?? {};
-    await adminAuth.setCustomUserClaims(uid, { ...existing, isManager: body.isManager });
+    await adminAuth.setCustomUserClaims(uid, { ...existing, isAdmin: body.isAdmin });
   } else {
     const update: UpdateRequest = {};
     if (body.password) update.password = body.password;

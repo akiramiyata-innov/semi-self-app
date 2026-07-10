@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Trash2, UserPlus, Upload, ChevronDown, ChevronUp, KeyRound, Shield, Building2 } from "lucide-react";
+import { Trash2, UserPlus, Upload, ChevronDown, ChevronUp, KeyRound, ShieldCheck, Building2 } from "lucide-react";
 import * as XLSX from "xlsx";
 import type { Station } from "@/lib/types";
 
@@ -11,8 +11,8 @@ interface StaffUser {
   email: string;
   displayName: string;
   creationTime: string;
-  isAdmin: boolean;
-  isManager: boolean;
+  isAdmin: boolean;       // 実効的な管理者（固定 or フラグ）
+  isSuperAdmin: boolean;  // 環境変数で設定された固定管理者（画面からは変更不可）
 }
 
 export default function AdminStaffPage() {
@@ -23,7 +23,7 @@ export default function AdminStaffPage() {
 
   // 新規スタッフ追加
   const [showForm, setShowForm] = useState(false);
-  const [newUser, setNewUser] = useState({ displayName: "", email: "", password: "", isManager: false });
+  const [newUser, setNewUser] = useState({ displayName: "", email: "", password: "" });
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState("");
 
@@ -89,14 +89,16 @@ export default function AdminStaffPage() {
     setOpenAssignUid(null);
   };
 
-  // マネージャーフラグ切替
-  const toggleManager = async (uid: string, current: boolean) => {
+  // 管理者フラグ切替（画面から付与/解除。反映は本人の再ログイン後）
+  const toggleAdmin = async (uid: string, current: boolean) => {
+    if (current && !confirm("この人の管理者権限を外しますか？（本人が再ログインすると管理画面に入れなくなります）")) return;
     await fetch(`/api/admin/users/${uid}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ isManager: !current }),
+      body: JSON.stringify({ isAdmin: !current }),
     });
     await fetchAll();
+    alert("管理者権限を変更しました。対象の方が再ログインすると反映されます。");
   };
 
   // スタッフ作成
@@ -109,7 +111,7 @@ export default function AdminStaffPage() {
       body: JSON.stringify(newUser),
     });
     if (res.ok) {
-      setNewUser({ displayName: "", email: "", password: "", isManager: false });
+      setNewUser({ displayName: "", email: "", password: "" });
       setShowForm(false);
       await fetchAll();
     } else {
@@ -213,7 +215,7 @@ export default function AdminStaffPage() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4 flex items-center justify-between">
           <div>
             <p className="text-sm font-medium text-gray-700">Excel / CSV 一括登録</p>
-            <p className="text-xs text-gray-400 mt-0.5">列名: 名前・メール・パスワード・マネージャー（○/true）</p>
+            <p className="text-xs text-gray-400 mt-0.5">列名: 名前・メール・パスワード</p>
           </div>
           <div className="flex items-center gap-2">
             <a
@@ -249,25 +251,24 @@ export default function AdminStaffPage() {
                           <p className="text-sm font-medium text-gray-900 truncate">
                             {user.displayName || "（名前未設定）"}
                           </p>
-                          {user.isAdmin && (
+                          {user.isSuperAdmin ? (
+                            <span className="shrink-0 px-1.5 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full" title="環境変数で設定された管理者（画面からは変更できません）">管理者（固定）</span>
+                          ) : user.isAdmin ? (
                             <span className="shrink-0 px-1.5 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full">管理者</span>
-                          )}
-                          {user.isManager && (
-                            <span className="shrink-0 px-1.5 py-0.5 bg-purple-100 text-purple-700 text-xs rounded-full">マネージャー</span>
-                          )}
+                          ) : null}
                         </div>
                         <p className="text-xs text-gray-400 mt-0.5 truncate">{user.email}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0 ml-2">
-                      {/* マネージャーフラグ */}
-                      {!user.isAdmin && (
+                      {/* 管理者フラグ（固定管理者は変更不可なので非表示） */}
+                      {!user.isSuperAdmin && (
                         <button
-                          onClick={() => toggleManager(user.uid, user.isManager)}
-                          title={user.isManager ? "マネージャー解除" : "マネージャーに設定"}
-                          className={`p-2 rounded-lg transition-colors ${user.isManager ? "text-purple-600 bg-purple-50 hover:bg-purple-100" : "text-gray-400 hover:text-purple-500 hover:bg-purple-50"}`}
+                          onClick={() => toggleAdmin(user.uid, user.isAdmin)}
+                          title={user.isAdmin ? "管理者を解除" : "管理者に設定"}
+                          className={`p-2 rounded-lg transition-colors ${user.isAdmin ? "text-blue-600 bg-blue-50 hover:bg-blue-100" : "text-gray-400 hover:text-blue-500 hover:bg-blue-50"}`}
                         >
-                          <Shield size={15} />
+                          <ShieldCheck size={15} />
                         </button>
                       )}
                       {/* 担当駅 */}
@@ -420,15 +421,6 @@ export default function AdminStaffPage() {
                   required minLength={8}
                 />
               </div>
-              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={newUser.isManager}
-                  onChange={(e) => setNewUser({ ...newUser, isManager: e.target.checked })}
-                  className="w-4 h-4 accent-purple-600"
-                />
-                マネージャー権限を付与
-              </label>
             </div>
             {formError && <p className="text-red-500 text-sm mt-3">{formError}</p>}
             <div className="flex gap-2 mt-4">
