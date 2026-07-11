@@ -193,9 +193,20 @@ async function translateWithGlossary(text: string, fromLang: string, toLang: str
 // no sentence-ending punctuation, so it arrives as one long run-on that trips
 // this limit. We split the text into pieces safely under the cap, synthesize
 // each, and concatenate the MP3 bytes (which decode fine as one stream).
-const MAX_TTS_BYTES = 220;
+// Each seam adds ~0.4s of silence, so we split as few times as safely possible
+// and cut at word-ish boundaries so that pause lands sensibly, not mid-word.
+const MAX_TTS_BYTES = 250;
 
-/** Split text into pieces each ≤ MAX_TTS_BYTES, preferring punctuation breaks. */
+type Script = "kanji" | "hira" | "kata" | "other";
+function scriptOf(ch: string): Script {
+  const c = ch.codePointAt(0) ?? 0;
+  if (c >= 0x4e00 && c <= 0x9fff) return "kanji";
+  if (c >= 0x3040 && c <= 0x309f) return "hira";
+  if ((c >= 0x30a0 && c <= 0x30ff) || (c >= 0xff66 && c <= 0xff9d)) return "kata";
+  return "other";
+}
+
+/** Split text into pieces each ≤ MAX_TTS_BYTES, preferring natural breaks. */
 function splitForTts(text: string): string[] {
   const clean = text.trim();
   if (!clean) return [];
@@ -208,10 +219,21 @@ function splitForTts(text: string): string[] {
   const flush = () => { const t = buf.trim(); if (t) chunks.push(t); buf = ""; };
 
   for (let unit of units) {
-    // A single punctuation-free unit can still exceed the cap → hard-split by length.
+    // A punctuation-free unit can exceed the cap. Split it, cutting just before a
+    // hiragana→kanji/katakana transition (usually a word start) near the target so
+    // the seam pause lands at a word boundary instead of mid-word. Fall back to a
+    // plain length cut when no such boundary is in range.
     while (Buffer.byteLength(unit) > MAX_TTS_BYTES) {
-      let cut = unit.length;
-      while (cut > 1 && Buffer.byteLength(unit.slice(0, cut)) > MAX_TTS_BYTES) cut--;
+      let hardCut = unit.length;
+      while (hardCut > 1 && Buffer.byteLength(unit.slice(0, hardCut)) > MAX_TTS_BYTES) hardCut--;
+      let cut = hardCut;
+      const minCut = Math.floor(hardCut * 0.6);
+      for (let i = hardCut; i > minCut; i--) {
+        if (scriptOf(unit[i - 1]) === "hira" && (scriptOf(unit[i]) === "kanji" || scriptOf(unit[i]) === "kata")) {
+          cut = i;
+          break;
+        }
+      }
       flush();
       chunks.push(unit.slice(0, cut));
       unit = unit.slice(cut);
