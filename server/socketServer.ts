@@ -188,6 +188,69 @@ async function translateWithGlossary(text: string, fromLang: string, toLang: str
   return result;
 }
 
+// Chirp3-HD rejects any single sentence longer than ~300 bytes ("This request
+// contains sentences that are too long"). Real staff speech comes from STT with
+// no sentence-ending punctuation, so it arrives as one long run-on that trips
+// this limit. We split the text into pieces safely under the cap, synthesize
+// each, and concatenate the MP3 bytes (which decode fine as one stream).
+const MAX_TTS_BYTES = 220;
+
+/** Split text into pieces each ≤ MAX_TTS_BYTES, preferring punctuation breaks. */
+function splitForTts(text: string): string[] {
+  const clean = text.trim();
+  if (!clean) return [];
+  if (Buffer.byteLength(clean) <= MAX_TTS_BYTES) return [clean];
+
+  // Break after sentence/clause punctuation, keeping the delimiter with its piece.
+  const units = clean.split(/(?<=[。．！？!?、,\n])/);
+  const chunks: string[] = [];
+  let buf = "";
+  const flush = () => { const t = buf.trim(); if (t) chunks.push(t); buf = ""; };
+
+  for (let unit of units) {
+    // A single punctuation-free unit can still exceed the cap → hard-split by length.
+    while (Buffer.byteLength(unit) > MAX_TTS_BYTES) {
+      let cut = unit.length;
+      while (cut > 1 && Buffer.byteLength(unit.slice(0, cut)) > MAX_TTS_BYTES) cut--;
+      flush();
+      chunks.push(unit.slice(0, cut));
+      unit = unit.slice(cut);
+    }
+    if (Buffer.byteLength(buf + unit) > MAX_TTS_BYTES) flush();
+    buf += unit;
+  }
+  flush();
+  return chunks;
+}
+
+/** Synthesize one piece (already within the length limit). Returns MP3 bytes or null. */
+async function synthesizeChunk(text: string, voiceLangCode: string, voiceName: string, apiKey: string, langCode: LangCode): Promise<Buffer | null> {
+  try {
+    const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        input: { text },
+        voice: { languageCode: voiceLangCode, name: voiceName },
+        // speakingRate 0.96 = a touch slower for clarity in a noisy station;
+        // volumeGainDb +2 = a little louder over ambient noise. No `pitch` — the
+        // Chirp3-HD voices reject it (returns "does not support pitch").
+        audioConfig: { audioEncoding: "MP3", speakingRate: 0.96, volumeGainDb: 2.0 },
+      }),
+    });
+    const json = await res.json() as { audioContent?: string; error?: { message: string } };
+    if (json.error) {
+      console.error(`[tts] API error [${langCode}]: ${json.error.message}`);
+      return null;
+    }
+    return json.audioContent ? Buffer.from(json.audioContent, "base64") : null;
+  } catch (e) {
+    console.error(`[tts] fetch error [${langCode}]:`, e);
+    return null;
+  }
+}
+
 async function synthesizeSpeech(text: string, langCode: LangCode): Promise<string> {
   const lang = getLang(langCode);
   const apiKey = getApiKey();
@@ -203,31 +266,17 @@ async function synthesizeSpeech(text: string, langCode: LangCode): Promise<strin
   // Speech fallback, where that BCP-47 tag is correct.)
   const voiceLangCode = lang.ttsVoice.split("-").slice(0, 2).join("-");
 
-  try {
-    const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        input: { text },
-        voice: { languageCode: voiceLangCode, name: lang.ttsVoice },
-        // speakingRate 0.96 = a touch slower for clarity in a noisy station;
-        // volumeGainDb +2 = a little louder over ambient noise. No `pitch` — the
-        // Chirp3-HD voices reject it (returns "does not support pitch").
-        audioConfig: { audioEncoding: "MP3", speakingRate: 0.96, volumeGainDb: 2.0 },
-      }),
-    });
-    const json = await res.json() as { audioContent?: string; error?: { message: string } };
-    if (json.error) {
-      console.error(`[tts] API error [${langCode}]: ${json.error.message}`);
-      return "";
-    }
-    console.log(`[tts] synthesized "${text}" [${langCode}] → ${json.audioContent ? `${json.audioContent.length} chars` : "EMPTY"}`);
-    return json.audioContent ?? "";
-  } catch (e) {
-    console.error(`[tts] fetch error [${langCode}]:`, e);
-    return "";
-  }
+  const chunks = splitForTts(text);
+  if (!chunks.length) return "";
+
+  // Synthesize the pieces in parallel, then join the MP3 bytes in order.
+  const parts = await Promise.all(chunks.map((c) => synthesizeChunk(c, voiceLangCode, lang.ttsVoice, apiKey, langCode)));
+  const buffers = parts.filter((b): b is Buffer => b !== null);
+  if (!buffers.length) return "";
+
+  const combined = Buffer.concat(buffers);
+  console.log(`[tts] synthesized "${text.slice(0, 30)}${text.length > 30 ? "…" : ""}" [${langCode}] in ${chunks.length} part(s) → ${combined.length} bytes`);
+  return combined.toString("base64");
 }
 
 function generateSessionId(): string {
