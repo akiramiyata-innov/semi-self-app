@@ -7,6 +7,7 @@ import { Avatar } from "@/components/Avatar";
 import { KioskHeader } from "@/components/KioskHeader";
 import { ScreenShareView } from "@/components/ScreenShareView";
 import { SUPPORTED_LANGS } from "@/lib/languages";
+import { unlockAudioContext } from "@/lib/audioUnlock";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useScreenCapture } from "@/hooks/useScreenCapture";
 import type { TranscriptEntry } from "@/lib/types";
@@ -406,12 +407,14 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   }, [transcript, interimStaff]);
 
   const selectLang = (code: LangCode) => {
+    unlockAudioContext(); // running inside a tap → unlock audio for the staff's TTS
     setUserLang(code);
     setPhase("idle");
   };
 
   const callStaff = () => {
     if (!connected) return;
+    unlockAudioContext(); // ensure audio is unlocked even if lang-select was skipped
     setPhase("calling");
     socketRef.current?.emit("call:request", { machineId, machineName, userLang, stationId });
   };

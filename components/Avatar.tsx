@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getSharedAudioContext } from "@/lib/audioUnlock";
 
 interface AvatarProps {
   /** Google TTS audio (base64 MP3) for the staff's speech. */
@@ -34,8 +35,15 @@ const MOUTH_WIDTH: Record<MouthShape, number> = {
   o: 41,
 };
 
-/** How often the mouth is re-evaluated while speaking. */
-const MOUTH_TICK_MS = 60;
+const MOUTH_SHAPES = Object.keys(MOUTH_WIDTH) as MouthShape[];
+
+// How often the mouth shape is re-evaluated while speaking. ~110ms ≈ a natural
+// syllable pace; faster (e.g. 60ms) looks twitchy, much slower lags the audio.
+const MOUTH_TICK_MS = 110;
+// Exponential smoothing of the loudness so borderline values don't flip the
+// mouth back and forth between ticks. Light enough that loud syllables still
+// reach the wide-open "a" shape. Lower = smoother/slower to react.
+const MOUTH_SMOOTHING = 0.6;
 
 /**
  * Loudness → how far the mouth opens. Thresholds are RMS of the playing audio
@@ -60,7 +68,6 @@ export function Avatar({
   const [speaking, setSpeaking] = useState(false);
   const [entered, setEntered] = useState(false);
   const [mouth, setMouth] = useState<MouthShape>("closed");
-  const audioCtxRef = useRef<AudioContext | null>(null);
   // The currently-playing Google TTS node, kept so we can stop it if the call
   // ends mid-sentence (otherwise the voice plays on after the screen closes).
   const sourceRef = useRef<AudioBufferSourceNode | null>(null);
@@ -90,7 +97,8 @@ export function Avatar({
 
   // Silence the audio when the avatar unmounts — e.g. the user presses キャンセル
   // mid-sentence. Without this the Web Audio source keeps playing to the end even
-  // though the call screen has already closed.
+  // though the call screen has already closed. (The shared AudioContext is left
+  // open on purpose so it stays unlocked for the next call.)
   useEffect(() => {
     return () => {
       const src = sourceRef.current;
@@ -99,8 +107,6 @@ export function Avatar({
         try { src.stop(); } catch { /* already stopped */ }
         sourceRef.current = null;
       }
-      const ctx = audioCtxRef.current;
-      if (ctx && ctx.state !== "closed") ctx.close().catch(() => {});
     };
   }, []);
 
@@ -123,29 +129,29 @@ export function Avatar({
       stopMouth();
     };
 
-    let ctx = audioCtxRef.current;
-    if (!ctx || ctx.state === "closed") {
-      ctx = new AudioContext();
-      audioCtxRef.current = ctx;
-    }
+    // Reuse the shared context that was unlocked on the user's tap (see
+    // lib/audioUnlock). Creating a fresh context here instead would start it
+    // suspended — browsers only let audio play from a gesture-unlocked context.
+    const ctx = getSharedAudioContext();
+    if (!ctx) return;
 
     const play = async () => {
       try {
-        if (ctx!.state === "suspended") await ctx!.resume();
+        if (ctx.state === "suspended") await ctx.resume();
 
         const binary = atob(audioBase64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
-        ctx!.decodeAudioData(bytes.buffer.slice(0), (buffer) => {
-          const source = ctx!.createBufferSource();
+        ctx.decodeAudioData(bytes.buffer.slice(0), (buffer) => {
+          const source = ctx.createBufferSource();
           source.buffer = buffer;
 
-          const analyser = ctx!.createAnalyser();
+          const analyser = ctx.createAnalyser();
           analyser.fftSize = 1024;
           const samples = new Uint8Array(analyser.fftSize);
           source.connect(analyser);
-          analyser.connect(ctx!.destination);
+          analyser.connect(ctx.destination);
 
           source.onended = stopSpeaking;
           sourceRef.current = source;
@@ -153,6 +159,7 @@ export function Avatar({
           source.start();
 
           stopMouth();
+          let smoothedRms = 0;
           mouthTimerRef.current = setInterval(() => {
             analyser.getByteTimeDomainData(samples);
             let sum = 0;
@@ -160,7 +167,9 @@ export function Avatar({
               const v = (samples[i] - 128) / 128;
               sum += v * v;
             }
-            const next = mouthForLevel(Math.sqrt(sum / samples.length));
+            const rms = Math.sqrt(sum / samples.length);
+            smoothedRms += (rms - smoothedRms) * MOUTH_SMOOTHING;
+            const next = mouthForLevel(smoothedRms);
             setMouth((prev) => (prev === next ? prev : next));
           }, MOUTH_TICK_MS);
         }, (err) => {
@@ -195,20 +204,27 @@ export function Avatar({
           className="w-full h-full select-none"
           draggable={false}
         />
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={`/avatar/mouth-${mouth}.svg`}
-          alt=""
-          aria-hidden="true"
-          draggable={false}
-          className="absolute select-none"
-          style={{
-            left: `${(MOUTH_CENTER_X / BASE_W) * 100}%`,
-            top: `${(MOUTH_TOP_Y / BASE_H) * 100}%`,
-            width: `${(MOUTH_WIDTH[mouth] / BASE_W) * 100}%`,
-            transform: "translateX(-50%)",
-          }}
-        />
+        {/* All mouth shapes are stacked and cross-fade via opacity, so shape
+            changes ease in/out instead of snapping between images. */}
+        {MOUTH_SHAPES.map((shape) => (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            key={shape}
+            src={`/avatar/mouth-${shape}.svg`}
+            alt=""
+            aria-hidden="true"
+            draggable={false}
+            className="absolute select-none"
+            style={{
+              left: `${(MOUTH_CENTER_X / BASE_W) * 100}%`,
+              top: `${(MOUTH_TOP_Y / BASE_H) * 100}%`,
+              width: `${(MOUTH_WIDTH[shape] / BASE_W) * 100}%`,
+              transform: "translateX(-50%)",
+              opacity: shape === mouth ? 1 : 0,
+              transition: "opacity 120ms ease-in-out",
+            }}
+          />
+        ))}
       </div>
       <div className="text-center shrink-0">
         {speaking ? (
