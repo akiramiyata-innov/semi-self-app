@@ -14,19 +14,17 @@ function splitStationCode(code: string) {
   return { letter: m[1], number: m[2] };
 }
 
-/**
- * 都営地下鉄ロゴの仮デザイン。正式なロゴ画像を入手したら
- * この <svg> を <img src="/toei-logo.svg" ... /> に差し替える。
- */
-function ToeiLogoPlaceholder() {
+/** 都営地下鉄ロゴ：公式いちょうマーク（public/toei-logo.webp、透過）＋ロゴタイプ。 */
+function ToeiLogo() {
   return (
     <div className="flex items-center gap-3">
-      <svg viewBox="0 0 64 64" className="w-12 h-12 shrink-0" aria-hidden="true">
-        <path
-          d="M32 6c-9 8-16 15-16 25a16 16 0 0 0 32 0c0-10-7-17-16-25z"
-          fill="#00913a"
-        />
-      </svg>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/toei-logo.webp"
+        alt="都営地下鉄"
+        className="w-12 h-12 shrink-0 object-contain"
+        draggable={false}
+      />
       <div className="leading-none">
         <div className="text-3xl font-bold tracking-[0.25em] text-gray-900">
           都営地下鉄
@@ -45,7 +43,7 @@ export function KioskHeader({ line, stationName, stationCode }: KioskHeaderProps
 
   return (
     <header className="shrink-0 min-h-24 flex items-center justify-between bg-white px-10 py-4 shadow-[0_2px_6px_rgba(0,0,0,0.18)]">
-      <ToeiLogoPlaceholder />
+      <ToeiLogo />
 
       {hasStationInfo && (
         <div className="flex items-center gap-4">
