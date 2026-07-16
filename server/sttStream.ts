@@ -32,8 +32,8 @@ export function registerSttHandlers(socket: Socket): void {
   let phrases: string[] = [];
   let running = false;
 
-  function openStream(): void {
-    const client = getSpeechClient();
+  async function openStream(): Promise<void> {
+    const client = await getSpeechClient();
     if (!client) {
       socket.emit("stt:error", { message: "STT unavailable (no API key)" });
       return;
@@ -65,10 +65,10 @@ export function registerSttHandlers(socket: Socket): void {
 
   function scheduleRestart(): void {
     if (restartTimer) clearTimeout(restartTimer);
-    restartTimer = setTimeout(() => {
+    restartTimer = setTimeout(async () => {
       if (!running) return;
       const old = stream; // open the new stream first, then end the old → no gap
-      openStream();
+      await openStream();
       try { old?.end(); } catch { /* already ended */ }
       scheduleRestart();
     }, STREAM_RESTART_MS);
@@ -87,7 +87,7 @@ export function registerSttHandlers(socket: Socket): void {
     const terms = await getGlossaryTermsFresh().catch(() => [] as GlossaryTerm[]);
     phrases = terms.map((t) => t.ja).filter(Boolean);
     running = true;
-    openStream();
+    await openStream();
     scheduleRestart();
   });
 
