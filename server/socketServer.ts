@@ -11,6 +11,7 @@ import { isGCSEnabled, uploadLog } from "../lib/gcsClient";
 import { getGlossaryTermsFresh } from "../lib/glossaryClient";
 import { getAssignmentsFresh } from "../lib/assignmentClient";
 import type { GlossaryTerm } from "../lib/types";
+import { registerSttHandlers } from "./sttStream";
 
 function getApiKey(): string {
   return process.env.GOOGLE_API_KEY || "";
@@ -320,6 +321,9 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
   });
 
   io.on("connection", (socket: Socket) => {
+
+    // ── Streaming STT (real-time, glossary-aware, long-form) ──────────────────
+    registerSttHandlers(socket);
 
     // ── Staff joins ───────────────────────────────────────────────────────────
     socket.on("staff:join", async (payload?: { name?: string; uid?: string; stationIds?: string[] }) => {

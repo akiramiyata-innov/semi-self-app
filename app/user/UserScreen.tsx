@@ -30,6 +30,10 @@ const ERR: Record<string, { noStaff: string; noStaffSub: string; disconnected: s
 let entryCounter = 0;
 function makeId() { return `e-${Date.now()}-${entryCounter++}`; }
 
+// Streaming STT keeps the mic open for continuous speech; the legacy paths send
+// one final per mic session and auto-OFF. Gated by the same env flag as the hook.
+const STREAMING_STT = process.env.NEXT_PUBLIC_STT_MODE === "streaming";
+
 // 通話中画面の背景：淡い水色のドット地 + 左端の縦帯
 const DOT_BACKGROUND = {
   backgroundColor: "#e2f7fa",
@@ -87,6 +91,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
 
   const { start: startMic, stop: stopMic, listening, error: micError } = useSpeechRecognition({
     lang: langConfig?.bcp47 ?? "ja-JP",
+    getSocket: () => socketRef.current,
     onInterim: (text) => setInterimUser(text),
     onFinal: (text) => {
       // Reject if recognized text matches what the avatar just said (echo)
@@ -103,9 +108,12 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         lang: userLangRef.current,
         isFinal: true,
       });
-      // Auto-OFF mic after sending — user must press mic button again to speak
-      stopMic();
-      micOnRef.current = false;
+      // Legacy paths give one final per mic session → auto-OFF after sending.
+      // Streaming gives a final per pause, so keep the mic ON for continuous speech.
+      if (!STREAMING_STT) {
+        stopMic();
+        micOnRef.current = false;
+      }
     },
   });
 

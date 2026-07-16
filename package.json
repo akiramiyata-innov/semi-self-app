@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@google-cloud/speech": "^7.5.0",
     "@google-cloud/storage": "^7.21.0",
     "firebase": "^12.15.0",
     "firebase-admin": "^14.1.0",

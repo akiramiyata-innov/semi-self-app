@@ -1,12 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { Socket } from "socket.io-client";
 
 interface UseSpeechRecognitionOptions {
   lang?: string;
   onInterim?: (text: string) => void;
   onFinal?: (text: string) => void;
   onStop?: () => void; // Edge: 録音停止時に必ず呼ばれる（無音でも）
+  /** streaming時（NEXT_PUBLIC_STT_MODE=streaming）: ライブの Socket.IO 接続を返すゲッター */
+  getSocket?: () => Socket | null;
 }
 
 type SpeechRecognitionCtor = new () => SpeechRecognition;
@@ -45,7 +48,7 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onStop }: UseSpeechRecognitionOptions) {
+export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onStop, getSocket }: UseSpeechRecognitionOptions) {
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,15 +57,26 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
   const onInterimRef = useRef(onInterim);
   const onFinalRef = useRef(onFinal);
   const onStopRef = useRef(onStop);
+  const getSocketRef = useRef(getSocket);
 
   // Edge has webkitSpeechRecognition but it fails with network errors — force Google STT
   const isEdge = typeof navigator !== "undefined" && /Edg\//.test(navigator.userAgent);
   const useWebSpeech = useRef(getSpeechRecognition() !== null && !isEdge).current;
+  // Streaming STT (real-time + glossary + long-form) takes priority when enabled.
+  // Falls back to the Web Speech / sync-Google paths otherwise.
+  const streamingEnabled = process.env.NEXT_PUBLIC_STT_MODE === "streaming";
 
   useEffect(() => { langRef.current = lang; }, [lang]);
   useEffect(() => { onInterimRef.current = onInterim; }, [onInterim]);
   useEffect(() => { onFinalRef.current = onFinal; }, [onFinal]);
   useEffect(() => { onStopRef.current = onStop; }, [onStop]);
+  useEffect(() => { getSocketRef.current = getSocket; }, [getSocket]);
+
+  // ── Streaming STT refs ──────────────────────────────────────────────────────
+  const sttCtxRef = useRef<AudioContext | null>(null);
+  const sttNodeRef = useRef<AudioWorkletNode | null>(null);
+  const sttStreamRef = useRef<MediaStream | null>(null);
+  const sttOffRef = useRef<(() => void) | null>(null); // removes socket listeners
 
   // ── Web Speech API refs ────────────────────────────────────────────────────
   const recognitionRef = useRef<SpeechRecognition | null>(null);
@@ -113,6 +127,71 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
     };
     recorder.start(200);
   }, [transcribeBlob]);
+
+  // ── Streaming STT: mic → AudioWorklet(16kHz PCM) → Socket.IO → Google ───────
+  const stopStreaming = useCallback(() => {
+    const socket = getSocketRef.current?.();
+    socket?.emit("stt:stop");
+    sttOffRef.current?.();
+    sttOffRef.current = null;
+    try { sttNodeRef.current?.disconnect(); } catch { /* ignore */ }
+    sttNodeRef.current = null;
+    sttStreamRef.current?.getTracks().forEach((t) => t.stop());
+    sttStreamRef.current = null;
+    const ctx = sttCtxRef.current;
+    sttCtxRef.current = null;
+    if (ctx && ctx.state !== "closed") ctx.close().catch(() => {});
+    onStopRef.current?.();
+  }, []);
+
+  const startStreaming = useCallback(async () => {
+    const socket = getSocketRef.current?.();
+    if (!socket) { setError("サーバーに接続できていません。少し待って再度お試しください。"); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      sttStreamRef.current = stream;
+      const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const ctx = new AC({ sampleRate: 16000 });
+      sttCtxRef.current = ctx;
+      await ctx.audioWorklet.addModule("/stt-worklet.js");
+      const source = ctx.createMediaStreamSource(stream);
+      const node = new AudioWorkletNode(ctx, "stt-processor");
+      sttNodeRef.current = node;
+      node.port.onmessage = (e: MessageEvent) => { socket.emit("stt:audio", e.data); };
+      source.connect(node);
+      // Pull the graph so the worklet runs, but keep it silent (no mic playback).
+      const mute = ctx.createGain();
+      mute.gain.value = 0;
+      node.connect(mute);
+      mute.connect(ctx.destination);
+
+      const onInterim = (p: { transcript?: string }) => { if (activeRef.current) onInterimRef.current?.(p.transcript ?? ""); };
+      const onFinal = (p: { transcript?: string }) => {
+        if (activeRef.current && p.transcript) { onInterimRef.current?.(""); onFinalRef.current?.(p.transcript); }
+      };
+      const onErr = (p: { message?: string }) => { setError(p?.message ? `音声認識エラー: ${p.message}` : "音声認識エラー"); };
+      socket.on("stt:interim", onInterim);
+      socket.on("stt:final", onFinal);
+      socket.on("stt:error", onErr);
+      sttOffRef.current = () => {
+        socket.off("stt:interim", onInterim);
+        socket.off("stt:final", onFinal);
+        socket.off("stt:error", onErr);
+      };
+
+      socket.emit("stt:start", { lang: langRef.current });
+      activeRef.current = true;
+      setListening(true);
+    } catch (e) {
+      const err = e as DOMException;
+      setError(
+        err.name === "NotAllowedError"
+          ? "マイクへのアクセスが拒否されました。ブラウザの設定でマイクを許可してください。"
+          : "マイクへのアクセスに失敗しました。"
+      );
+      stopStreaming();
+    }
+  }, [stopStreaming]);
 
   // ── Web Speech API: core recognition instance ──────────────────────────────
   const startInternal = useCallback(() => {
@@ -190,7 +269,9 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
     if (newLang) langRef.current = newLang;
     setError(null);
 
-    if (useWebSpeech) {
+    if (streamingEnabled) {
+      await startStreaming();
+    } else if (useWebSpeech) {
       // Chrome path: warm up getUserMedia then launch Web Speech API
       const prev = recognitionRef.current;
       recognitionRef.current = null;
@@ -226,12 +307,14 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
         );
       }
     }
-  }, [useWebSpeech, startGstManual]);
+  }, [streamingEnabled, startStreaming, useWebSpeech, startGstManual]);
 
   // ── Public: stop ───────────────────────────────────────────────────────────
   const stop = useCallback(() => {
     activeRef.current = false;
-    if (useWebSpeech) {
+    if (streamingEnabled) {
+      stopStreaming();
+    } else if (useWebSpeech) {
       const rec = recognitionRef.current;
       recognitionRef.current = null;
       try { rec?.stop(); } catch { /* ignore */ }
@@ -249,7 +332,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
     }
     setListening(false);
     setError(null);
-  }, [useWebSpeech]);
+  }, [streamingEnabled, stopStreaming, useWebSpeech]);
 
   // ── Cleanup on unmount ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -260,9 +343,15 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
       recognitionRef.current = null;
       try { rec?.stop(); } catch { /* ignore */ }
       gstStreamRef.current?.getTracks().forEach((t) => t.stop());
+      // streaming teardown
+      sttOffRef.current?.();
+      sttNodeRef.current?.disconnect();
+      sttStreamRef.current?.getTracks().forEach((t) => t.stop());
+      const ctx = sttCtxRef.current;
+      if (ctx && ctx.state !== "closed") ctx.close().catch(() => {});
     };
   }, []);
 
-  // manualStop=true → Edge/GST（手動ON/OFF）、false → Chrome（onFinal で自動OFF）
-  return { start, stop, listening, supported: true, error, manualStop: !useWebSpeech };
+  // manualStop=true → streaming / Edge・GST（手動ON/OFF）、false → Chrome（onFinal で自動OFF）
+  return { start, stop, listening, supported: true, error, manualStop: streamingEnabled || !useWebSpeech };
 }
