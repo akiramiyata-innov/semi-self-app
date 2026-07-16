@@ -340,6 +340,15 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         assignedStations,
       });
 
+      // Drop stale presence for the same person. Logging out and back in quickly
+      // leaves the previous socket in the map (its disconnect hasn't fired yet),
+      // which showed the staff twice in the online list. Keep only this socket.
+      if (uid) {
+        for (const [sid, rec] of staffMap) {
+          if (sid !== socket.id && rec.uid === uid) staffMap.delete(sid);
+        }
+      }
+
       socket.join("call-queue");
 
       // Replay the current queue to this staff — but only calls they are eligible
