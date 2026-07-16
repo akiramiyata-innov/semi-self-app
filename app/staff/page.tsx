@@ -30,7 +30,6 @@ interface ActiveSession {
   interimUserText: string;
   interimStaffText: string;
   userCameraFaceFrame: string | null;
-  userCameraHandFrame: string | null;
   isListening: boolean;
   isCapturing: boolean;
 }
@@ -428,21 +427,16 @@ export default function StaffPage() {
     );
 
     s.on("screen:frame", (payload: { sessionId: string; frameData: string; camera?: "face" | "hand" }) => {
-      // Face-camera frames can arrive before the call is answered (ringing preview) —
-      // keep them keyed by sessionId so the incoming-call card can show it.
-      if (payload.camera !== "hand") {
-        setPreviewFaceFrames((prev) => {
-          const next = new Map(prev);
-          next.set(payload.sessionId, payload.frameData);
-          return next;
-        });
-      }
-      updateSession(
-        payload.sessionId,
-        payload.camera === "hand"
-          ? { userCameraHandFrame: payload.frameData }
-          : { userCameraFaceFrame: payload.frameData }
-      );
+      // The hand camera is no longer shown to staff — ignore its frames.
+      if (payload.camera === "hand") return;
+      // Face (券面) frames can arrive before the call is answered; keep them keyed by
+      // sessionId so the in-call view has no blank flash on answer.
+      setPreviewFaceFrames((prev) => {
+        const next = new Map(prev);
+        next.set(payload.sessionId, payload.frameData);
+        return next;
+      });
+      updateSession(payload.sessionId, { userCameraFaceFrame: payload.frameData });
     });
 
     return () => { s.disconnect(); };
@@ -465,7 +459,6 @@ export default function StaffPage() {
       interimStaffText: "",
       // Carry over the ringing-preview face frame so there's no blank flash on answer
       userCameraFaceFrame: previewFaceFrames.get(call.sessionId) ?? null,
-      userCameraHandFrame: null,
       isListening: false,
       isCapturing: false,
     }]]));
@@ -941,7 +934,6 @@ export default function StaffPage() {
                   onAnswer={() => answerCall(call)}
                   onReject={() => rejectCall(call.sessionId)}
                   userLang={call.userLang}
-                  faceFrame={previewFaceFrames.get(call.sessionId) ?? null}
                 />
               </div>
             ))}
@@ -978,7 +970,6 @@ export default function StaffPage() {
                   interimUserText={session.interimUserText}
                   interimStaffText={session.interimStaffText}
                   userCameraFaceFrame={session.userCameraFaceFrame}
-                  userCameraHandFrame={session.userCameraHandFrame}
                   isListening={isListening}
                   isCapturing={capturing && captureSessionRef.current === session.sessionId}
                   micError={micError}

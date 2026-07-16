@@ -16,7 +16,6 @@ interface ActiveCallPanelProps {
   interimUserText?: string;
   interimStaffText?: string;
   userCameraFaceFrame?: string | null;
-  userCameraHandFrame?: string | null;
   isCapturing: boolean;
   isListening: boolean;
   micError?: string | null;
@@ -34,7 +33,6 @@ export function ActiveCallPanel({
   interimUserText,
   interimStaffText,
   userCameraFaceFrame,
-  userCameraHandFrame,
   isCapturing,
   isListening,
   micError,
@@ -160,23 +158,14 @@ export function ActiveCallPanel({
           />
         </div>
 
-        {/* Camera feeds from kiosk: 正面（顔）カメラ + 手元カメラ、上下に並べて手元を大きく表示 */}
-        {(userCameraFaceFrame || userCameraHandFrame) && (
+        {/* Camera feed from kiosk: 券面カメラ */}
+        {userCameraFaceFrame && (
           <div className="w-56 border-l border-gray-100 p-2 shrink-0 flex flex-col gap-2 overflow-y-auto">
-            {userCameraFaceFrame && (
-              <ScreenShareView
-                frameData={userCameraFaceFrame}
-                label="正面カメラ"
-                className="h-40 shrink-0"
-              />
-            )}
-            {userCameraHandFrame && (
-              <ScreenShareView
-                frameData={userCameraHandFrame}
-                label="手元カメラ"
-                className="h-56 shrink-0"
-              />
-            )}
+            <ScreenShareView
+              frameData={userCameraFaceFrame}
+              label="券面カメラ"
+              className="h-40 shrink-0"
+            />
           </div>
         )}
       </div>
