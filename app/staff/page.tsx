@@ -43,8 +43,8 @@ const KIOSK_MACHINES = [
 
 // メニュー有効フラグ（false = 表示はするがクリック不可・薄いグレー、true = 通常リンク）
 // 後で戻すときは true に変更するだけ
-const CALL_LOGS_ENABLED = false;      // 通話ログ
-const GLOSSARY_ADMIN_ENABLED = false; // 用語集管理
+const CALL_LOGS_ENABLED = true;      // 通話ログ
+const GLOSSARY_ADMIN_ENABLED = true; // 用語集管理
 
 let entryCounter = 0;
 function makeId() { return `s-${Date.now()}-${entryCounter++}`; }

@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
       .map((row) => ({
         id: Date.now().toString() + Math.random().toString(36).slice(2, 6),
         ja: row.ja!.trim(),
+        yomi: row.yomi?.trim() || undefined,
         en: row.en?.trim() || undefined,
         zh: row.zh?.trim() || undefined,
         "zh-TW": row["zh-TW"]?.trim() || undefined,

@@ -24,6 +24,7 @@ export async function POST(req: NextRequest) {
     const newTerm: GlossaryTerm = {
       id: Date.now().toString(),
       ja: body.ja.trim(),
+      yomi: body.yomi?.trim() || undefined,
       en: body.en?.trim() || undefined,
       zh: body.zh?.trim() || undefined,
       "zh-TW": body["zh-TW"]?.trim() || undefined,

@@ -7,6 +7,11 @@ export interface Station {
 export interface GlossaryTerm {
   id: string;
   ja: string;
+  /**
+   * 読み（ひらがな）。任意。chirp_2 が漢字化できず読み（カナ）で出してしまう語
+   * （例：舎人→トネリ）を、認識後に漢字へ戻す後処理に使う。
+   */
+  yomi?: string;
   en?: string;
   zh?: string;
   "zh-TW"?: string;

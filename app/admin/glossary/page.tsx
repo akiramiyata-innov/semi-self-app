@@ -16,7 +16,7 @@ const LANG_LABELS: { key: keyof GlossaryTerm; label: string }[] = [
   { key: "th", label: "タイ語" },
 ];
 
-const EMPTY_FORM = { ja: "", en: "", zh: "", "zh-TW": "", ko: "", fr: "", es: "", th: "" };
+const EMPTY_FORM = { ja: "", yomi: "", en: "", zh: "", "zh-TW": "", ko: "", fr: "", es: "", th: "" };
 
 export default function GlossaryPage() {
   const router = useRouter();
@@ -85,6 +85,7 @@ export default function GlossaryPage() {
           keys.map((k) => row[k] ?? "").find((v) => v.trim()) ?? "";
         return {
           ja: normalize(["日本語", "ja", "JA", "Japanese"]),
+          yomi: normalize(["よみ", "読み", "ふりがな", "yomi", "reading"]),
           en: normalize(["英語", "en", "EN", "English"]),
           zh: normalize(["中国語（簡体）", "中国語", "zh", "ZH", "Chinese", "Simplified Chinese"]),
           "zh-TW": normalize(["中国語（繁体）", "繁体字中国語", "zh-TW", "ZH-TW", "Traditional Chinese", "繁体中文"]),
@@ -165,7 +166,8 @@ export default function GlossaryPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">日本語</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600 whitespace-nowrap">日本語</th>
+                  <th className="text-left px-3 py-3 font-medium text-gray-600 whitespace-nowrap">よみ</th>
                   {LANG_LABELS.map((l) => (
                     <th key={l.key} className="text-left px-3 py-3 font-medium text-gray-600">{l.label}</th>
                   ))}
@@ -175,7 +177,10 @@ export default function GlossaryPage() {
               <tbody className="divide-y divide-gray-100">
                 {terms.map((term) => (
                   <tr key={term.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-900">{term.ja}</td>
+                    <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">{term.ja}</td>
+                    <td className="px-3 py-3 text-gray-500 whitespace-nowrap">
+                      {term.yomi || <span className="text-gray-300">—</span>}
+                    </td>
                     {LANG_LABELS.map((l) => (
                       <td key={l.key} className="px-3 py-3 text-gray-500">
                         {term[l.key] || <span className="text-gray-300">—</span>}
@@ -253,6 +258,18 @@ export default function GlossaryPage() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
                   required
                   autoFocus
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  よみ（ひらがな） <span className="text-gray-400 font-normal">任意 — 漢字が読みのまま表示される駅名などの補正用</span>
+                </label>
+                <input
+                  type="text"
+                  value={form.yomi}
+                  onChange={(e) => setForm({ ...form, yomi: e.target.value })}
+                  placeholder="例：とねり（舎人）、ひもんや（碑文谷）"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
                 />
               </div>
               {LANG_LABELS.map((l) => (
