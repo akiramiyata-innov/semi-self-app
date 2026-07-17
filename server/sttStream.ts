@@ -1,18 +1,18 @@
 import type { Socket } from "socket.io";
-import type { SpeechClient } from "@google-cloud/speech";
-import { getSpeechClient } from "../lib/speechClient";
+import type { v2 } from "@google-cloud/speech";
+import { getSpeechClient, RECOGNIZER, SPEECH_MODEL } from "../lib/speechClient";
 import { getGlossaryTermsFresh } from "../lib/glossaryClient";
 import type { GlossaryTerm } from "../lib/types";
 
-// Google streaming recognition has a ~5-minute per-stream limit. Reopen the stream
-// before then so long (2 min+) speech continues seamlessly — this is what lets us
-// beat the ~30s practical cap of the sync API on browser (MediaRecorder) audio.
+// Google streaming recognition has a per-stream time limit. Reopen the stream
+// before then so long (2 min+) speech continues seamlessly.
 const STREAM_RESTART_MS = 4.5 * 60 * 1000;
-const BOOST = 15;
+// V2 model adaptation caps the phrase boost at 20 (higher → INVALID_ARGUMENT).
+const BOOST = 20;
 
-type SpeechStream = ReturnType<SpeechClient["streamingRecognize"]>;
+type SpeechStream = ReturnType<v2.SpeechClient["_streamingRecognize"]>;
 
-/** Minimal shape of a StreamingRecognizeResponse we consume. */
+/** Minimal shape of a V2 StreamingRecognizeResponse we consume. */
 interface StreamingResult {
   results?: Array<{
     isFinal?: boolean | null;
@@ -21,9 +21,12 @@ interface StreamingResult {
 }
 
 /**
- * Registers per-socket streaming STT: the client sends `stt:start` then a series
- * of raw 16kHz mono PCM chunks via `stt:audio`, and receives `stt:interim` /
- * `stt:final` transcripts in real time. `stt:stop` (or disconnect) ends it.
+ * Registers per-socket streaming STT (Speech-to-Text **V2**, chirp_2 model). The
+ * client sends `stt:start` then raw 16kHz mono PCM chunks via `stt:audio`, and
+ * receives `stt:interim` / `stt:final` transcripts in real time. `stt:stop` (or
+ * disconnect) ends it. Registered glossary terms are passed as inline model
+ * adaptation so domain words (station names, jargon) are recognized correctly —
+ * this is what the classic V1 phrase hints failed to do.
  */
 export function registerSttHandlers(socket: Socket): void {
   let stream: SpeechStream | null = null;
@@ -35,23 +38,30 @@ export function registerSttHandlers(socket: Socket): void {
   async function openStream(): Promise<void> {
     const client = await getSpeechClient();
     if (!client) {
-      socket.emit("stt:error", { message: "STT unavailable (no API key)" });
+      socket.emit("stt:error", { message: "STT unavailable (no credentials)" });
       return;
     }
-    const s = client.streamingRecognize({
-      config: {
-        encoding: "LINEAR16",
-        sampleRateHertz: 16000,
-        languageCode: lang || "ja-JP",
-        enableAutomaticPunctuation: true,
-        ...(phrases.length > 0 ? { speechContexts: [{ phrases, boost: BOOST }] } : {}),
-      },
-      interimResults: true,
+    // Adaptation phrases are the Japanese glossary terms, so only apply them to
+    // Japanese recognition (they would not help — and could hurt — other langs).
+    const useAdaptation = phrases.length > 0 && lang.startsWith("ja");
+    const config = {
+      explicitDecodingConfig: { encoding: "LINEAR16" as const, sampleRateHertz: 16000, audioChannelCount: 1 },
+      languageCodes: [lang || "ja-JP"],
+      model: SPEECH_MODEL,
+      ...(useAdaptation
+        ? { adaptation: { phraseSets: [{ inlinePhraseSet: { phrases: phrases.map((value) => ({ value, boost: BOOST })) } }] } }
+        : {}),
+    };
+    // V2 streaming needs the recognizer in the routing header (x-goog-request-params);
+    // without it the regional backend rejects the request ("Invalid resource field value").
+    const s = client._streamingRecognize({
+      otherArgs: { headers: { "x-goog-request-params": `recognizer=${encodeURIComponent(RECOGNIZER)}` } },
     });
     s.on("data", (data: StreamingResult) => {
       const r = data.results?.[0];
       if (!r) return;
       const transcript = r.alternatives?.[0]?.transcript ?? "";
+      if (!transcript) return;
       if (r.isFinal) socket.emit("stt:final", { transcript });
       else socket.emit("stt:interim", { transcript });
     });
@@ -60,6 +70,8 @@ export function registerSttHandlers(socket: Socket): void {
       socket.emit("stt:error", { message: err.message });
       if (stream === s) stream = null; // a fresh stt:start (or restart) reopens
     });
+    // First message: recognizer + streaming config. Subsequent writes are audio.
+    s.write({ recognizer: RECOGNIZER, streamingConfig: { config, streamingFeatures: { interimResults: true } } });
     stream = s;
   }
 
@@ -94,7 +106,7 @@ export function registerSttHandlers(socket: Socket): void {
   socket.on("stt:audio", (chunk: ArrayBuffer | Buffer) => {
     if (!stream) return;
     try {
-      stream.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      stream.write({ audio: Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk) });
     } catch { /* stream closing */ }
   });
 
