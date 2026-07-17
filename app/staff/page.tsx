@@ -87,7 +87,6 @@ export default function StaffPage() {
   const uidRef = useRef("");
   const myStationIdsRef = useRef<string[]>([]);
   const [staffName, setStaffName] = useState<string | null>(null);
-  const [nameInput, setNameInput] = useState("");
   const [myStatus, setMyStatus] = useState<StaffStatus>("available");
   const [staffList, setStaffList] = useState<StaffInfo[]>([]);
   const [showStaffList, setShowStaffList] = useState(false);
@@ -121,23 +120,25 @@ export default function StaffPage() {
   // initialDataLoaded: sessionInfo・担当駅が両方揃ったら true
   const [initialDataLoaded, setInitialDataLoaded] = useState(false);
 
-  // Check sessionStorage for saved name on mount (per-tab, not shared across tabs)
+  // 認証情報・担当駅を取得。表示名は「登録アカウント名」を強制使用する（スタッフが
+  // 自由に名乗れると、メールと違う名前で表示される問題があったため。改ざん防止）。
   useEffect(() => {
-    const saved = sessionStorage.getItem("staffName");
-    if (saved) {
-      staffNameRef.current = saved;
-      setStaffName(saved);
-    }
     Promise.all([
       fetch("/api/auth/me").then((r) => r.json()).catch(() => null),
       fetch("/api/staff/assignments/me").then((r) => r.json()).catch(() => null),
       fetch("/api/admin/stations").then((r) => r.json()).catch(() => null),
     ]).then(([info, assignments, stationsData]) => {
-      if (info) {
-        setSessionInfo(info);
-        uidRef.current = info.uid ?? "";
-        if (!saved && info.name) setNameInput(info.name);
+      if (!info?.uid) {
+        // 有効なセッションが無い → ログインへ（名前入力画面は出さない）
+        window.location.href = "/staff/login";
+        return;
       }
+      setSessionInfo(info);
+      uidRef.current = info.uid;
+      // 登録名（Firebase 表示名）を表示名として使用。未設定時のみメールで代替。
+      const registeredName = (info.name || info.email || "スタッフ").trim();
+      staffNameRef.current = registeredName;
+      setStaffName(registeredName);
       if (assignments?.stationIds) {
         setMyStationIds(assignments.stationIds);
         myStationIdsRef.current = assignments.stationIds;
@@ -175,15 +176,6 @@ export default function StaffPage() {
     const timer = setInterval(checkSession, 5 * 60 * 1000);
     return () => clearInterval(timer);
   }, [addToast]);
-
-  const submitName = useCallback(() => {
-    const name = nameInput.trim();
-    if (!name) return;
-    sessionStorage.setItem("staffName", name);
-    staffNameRef.current = name;
-    setStaffName(name);
-    socketRef.current?.emit("staff:join", { name, uid: sessionInfo?.uid ?? "", stationIds: myStationIdsRef.current });
-  }, [nameInput, sessionInfo]);
 
   const saveMyStations = useCallback(async () => {
     setSavingStations(true);
@@ -574,35 +566,6 @@ export default function StaffPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
-
-      {/* ── 名前入力モーダル ────────────────────────────────────────────────── */}
-      {staffName === null && (
-        <div className="fixed inset-0 z-50 bg-blue-900/80 backdrop-blur-sm flex items-center justify-center">
-          <div className="bg-white rounded-2xl shadow-2xl p-8 w-80">
-            <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center mb-4">
-              <span className="text-white text-sm font-bold">遠隔</span>
-            </div>
-            <h2 className="text-lg font-bold text-gray-900 mb-1">スタッフ名を入力</h2>
-            <p className="text-sm text-gray-500 mb-5">キオスク画面に表示される名前です</p>
-            <input
-              type="text"
-              value={nameInput}
-              onChange={(e) => setNameInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && submitName()}
-              placeholder="例：田中"
-              autoFocus
-              className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 mb-3"
-            />
-            <button
-              onClick={submitName}
-              disabled={!nameInput.trim()}
-              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition-colors"
-            >
-              開始する
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <header className="bg-white border-b border-gray-200 px-6 py-3 shrink-0">
