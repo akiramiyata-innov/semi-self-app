@@ -101,6 +101,7 @@ export function registerSttHandlers(socket: Socket): void {
   let corrections: Correction[] = [];
   let readingMap: ReadingEntry[] = [];
   let running = false;
+  let consecutiveErrors = 0;
 
   /** 認識結果のカナ読みを、登録された漢字に置き換える（chirp_2 が漢字化しきれない語の後処理）。 */
   function applyCorrections(text: string): string {
@@ -117,6 +118,12 @@ export function registerSttHandlers(socket: Socket): void {
       socket.emit("stt:error", { message: "STT unavailable (no credentials)" });
       return;
     }
+    // 既存ストリームが残っていたら先に閉じる。多重 stt:start（マイクの素早いON/OFF等）で
+    // 古いストリームがリークすると、音声が届かないままGoogleが
+    // "Stream timed out after receiving no more client requests" でタイムアウトする。
+    const prev = stream;
+    stream = null;
+    try { prev?.end(); } catch { /* already ended */ }
     // Adaptation phrases are the Japanese glossary terms, so only apply them to
     // Japanese recognition (they would not help — and could hurt — other langs).
     const useAdaptation = phrases.length > 0 && lang.startsWith("ja");
@@ -134,6 +141,7 @@ export function registerSttHandlers(socket: Socket): void {
       otherArgs: { headers: { "x-goog-request-params": `recognizer=${encodeURIComponent(RECOGNIZER)}` } },
     });
     s.on("data", async (data: StreamingResult) => {
+      consecutiveErrors = 0; // 正常に認識が流れている
       const r = data.results?.[0];
       if (!r) return;
       const raw = r.alternatives?.[0]?.transcript ?? "";
@@ -149,8 +157,16 @@ export function registerSttHandlers(socket: Socket): void {
     });
     s.on("error", (err: Error) => {
       console.error("[stt] stream error:", err.message);
-      socket.emit("stt:error", { message: err.message });
-      if (stream === s) stream = null; // a fresh stt:start (or restart) reopens
+      if (stream === s) stream = null;
+      if (!running) return; // 停止後のエラー（半クローズ等）は無視
+      // 稼働中の一時エラー（無音タイムアウト等）は自動で開き直してマイクを継続させる。
+      // 連続で失敗し続ける場合のみ利用者にエラーを見せる（無限ループ防止）。
+      if (consecutiveErrors < 3) {
+        consecutiveErrors++;
+        void openStream();
+      } else {
+        socket.emit("stt:error", { message: err.message });
+      }
     });
     // First message: recognizer + streaming config. Subsequent writes are audio.
     s.write({ recognizer: RECOGNIZER, streamingConfig: { config, streamingFeatures: { interimResults: true } } });
@@ -184,6 +200,7 @@ export function registerSttHandlers(socket: Socket): void {
     readingMap = buildReadingMap(terms);
     warmUpTokenizer(); // 辞書ロードを先行させ、初回の確定までに準備を整える
     running = true;
+    consecutiveErrors = 0;
     await openStream();
     scheduleRestart();
   });

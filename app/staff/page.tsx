@@ -46,6 +46,9 @@ const KIOSK_MACHINES = [
 const CALL_LOGS_ENABLED = true;      // 通話ログ
 const GLOSSARY_ADMIN_ENABLED = true; // 用語集管理
 
+// ストリーミングSTT時は、スタッフも「連続入力」（確定ごとにマイクを自動OFFしない）。
+const STREAMING = process.env.NEXT_PUBLIC_STT_MODE === "streaming";
+
 let entryCounter = 0;
 function makeId() { return `s-${Date.now()}-${entryCounter++}`; }
 
@@ -224,7 +227,8 @@ export default function StaffPage() {
     lang: "ja-JP",
     getSocket: () => socketRef.current,
     // Edge/streaming: 無音でOFFしたとき onFinal は発火しない → onStop で必ずセッションをクリア
-    onStop: () => { activeListeningSession.current = null; },
+    // （streaming では停止の数秒後に呼ばれる。その間に次のマイクONが始まっていたら消さない）
+    onStop: () => { if (!micOnRef.current) activeListeningSession.current = null; },
     onInterim: (text) => {
       const sid = activeListeningSession.current;
       if (!sid) return;
@@ -254,11 +258,14 @@ export default function StaffPage() {
 
       socketRef.current?.emit("speech:staff", { sessionId: sid, text, isFinal: true });
 
-      // Auto-OFF mic after sending — staff must press mic button again to speak
-      stopMic();
-      activeListeningSession.current = null;
-      setActiveListeningId(null);
-      micOnRef.current = false;
+      // 非ストリーミング（Chrome/Edge）は従来通りターン制: 送信後マイクOFF、再度押して話す。
+      // ストリーミング時はマイクを止めず連続入力にする（キオスク側と同じ扱い）。
+      if (!STREAMING) {
+        stopMic();
+        activeListeningSession.current = null;
+        setActiveListeningId(null);
+        micOnRef.current = false;
+      }
     },
   });
 
@@ -508,28 +515,59 @@ export default function StaffPage() {
   // Uses refs so the handler is always registered once and reads latest values.
   const activeSessionsRef = useRef(activeSessions);
   useEffect(() => { activeSessionsRef.current = activeSessions; }, [activeSessions]);
-  const toggleMicRef = useRef(toggleMic);
-  useEffect(() => { toggleMicRef.current = toggleMic; }, [toggleMic]);
-  const manualStopRef = useRef(manualStop);
-  useEffect(() => { manualStopRef.current = manualStop; }, [manualStop]);
+  const startMicRef = useRef(startMic);
+  useEffect(() => { startMicRef.current = startMic; }, [startMic]);
+  const stopMicRef = useRef(stopMic);
+  useEffect(() => { stopMicRef.current = stopMic; }, [stopMic]);
+  const pttActiveRef = useRef(false); // Space プッシュ・トゥ・トークがマイクを開始したか
 
+  // Space = プッシュ・トゥ・トーク：押している間だけマイクON、離すとOFF。
+  // マイクボタンは従来通りクリックでON/OFFトグル（toggleMic）。両者は独立して動く。
   useEffect(() => {
+    const inField = (t: EventTarget | null) =>
+      t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement;
+    const targetSid = () =>
+      activeListeningSession.current || Array.from(activeSessionsRef.current.keys())[0];
+    const stopPtt = () => {
+      if (!pttActiveRef.current) return;
+      pttActiveRef.current = false;
+      stopMicRef.current();
+      micOnRef.current = false;
+      // activeListeningSession はここでは消さない：停止直後に遅れて届く確定テキストの
+      // 行き先として必要（フックが数秒のドレイン後 onStop で消す）。
+      setActiveListeningId(null);
+    };
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code !== "Space") return;
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.code !== "Space" || inField(e.target)) return;
       e.preventDefault();
-      const currentSid = activeListeningSession.current;
-      if (currentSid) {
-        // Chrome(Web Speech API): マイクON中は Space で OFF にしない（onFinal で自動OFF）
-        if (!manualStopRef.current) return;
-        toggleMicRef.current(currentSid);
-      } else {
-        const firstSid = Array.from(activeSessionsRef.current.keys())[0];
-        if (firstSid) toggleMicRef.current(firstSid);
+      // ボタンにフォーカスが残っていると、Space がそのボタンの「クリック」として扱われ、
+      // マイクボタンが勝手に押される（→ Spaceが効かなくなる）。フォーカスを外して防ぐ。
+      if (document.activeElement instanceof HTMLElement && document.activeElement.tagName === "BUTTON") {
+        document.activeElement.blur();
       }
+      if (e.repeat) return;         // 押しっぱなしの自動リピートは無視
+      if (micOnRef.current) return; // 既にON（マイクボタン等）→ Spaceは干渉しない
+      const sid = targetSid();
+      if (!sid) return;
+      pttActiveRef.current = true;  // このマイクONはSpace起因
+      activeListeningSession.current = sid;
+      setActiveListeningId(sid);
+      micOnRef.current = true;
+      startMicRef.current("ja-JP");
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || inField(e.target)) return;
+      e.preventDefault(); // フォーカス中ボタンの Space クリック発火（keyup時）も抑止
+      stopPtt();
     };
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", stopPtt); // フォーカスが外れたら確実にOFF
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", stopPtt);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

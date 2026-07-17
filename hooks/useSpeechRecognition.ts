@@ -77,6 +77,12 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
   const sttNodeRef = useRef<AudioWorkletNode | null>(null);
   const sttStreamRef = useRef<MediaStream | null>(null);
   const sttOffRef = useRef<(() => void) | null>(null); // removes socket listeners
+  // 開始/停止の競合防止: stop() で世代を進め、進行中の startStreaming を無効化する。
+  // （素早いON/OFFで stt:stop → stt:start の順が逆転し、音声の来ないストリームが
+  //   サーバー側に残ってタイムアウトエラーになるのを防ぐ）
+  const sttGenRef = useRef(0);
+  const sttListenerSocketRef = useRef<Socket | null>(null); // リスナー登録済みソケット
+  const sttDrainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Web Speech API refs ────────────────────────────────────────────────────
   const recognitionRef = useRef<SpeechRecognition | null>(null);
@@ -129,11 +135,36 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
   }, [transcribeBlob]);
 
   // ── Streaming STT: mic → AudioWorklet(16kHz PCM) → Socket.IO → Google ───────
+  // 受信リスナーはソケットごとに1回だけ登録して常設する（開始のたびに登録すると、
+  // 短時間のON/OFFで重複登録＝テキスト二重表示の原因になる）。確定(final)は停止直後に
+  // 遅れて届くことがあるため、activeRef に関係なく常に届ける（話し終わりの文字消え対策）。
+  const ensureSttListeners = useCallback((socket: Socket) => {
+    if (sttListenerSocketRef.current === socket) return;
+    sttOffRef.current?.(); // 旧ソケットのリスナーを掃除（再接続時）
+    const onInterim = (p: { transcript?: string }) => { if (activeRef.current) onInterimRef.current?.(p.transcript ?? ""); };
+    const onFinal = (p: { transcript?: string }) => {
+      if (p.transcript) { onInterimRef.current?.(""); onFinalRef.current?.(p.transcript); }
+    };
+    const onErr = (p: { message?: string }) => {
+      if (activeRef.current) setError(p?.message ? `音声認識エラー: ${p.message}` : "音声認識エラー");
+    };
+    socket.on("stt:interim", onInterim);
+    socket.on("stt:final", onFinal);
+    socket.on("stt:error", onErr);
+    sttListenerSocketRef.current = socket;
+    sttOffRef.current = () => {
+      socket.off("stt:interim", onInterim);
+      socket.off("stt:final", onFinal);
+      socket.off("stt:error", onErr);
+      sttListenerSocketRef.current = null;
+    };
+  }, []);
+
   const stopStreaming = useCallback(() => {
+    sttGenRef.current++; // 進行中の startStreaming を無効化
     const socket = getSocketRef.current?.();
+    const wasCapturing = !!(sttNodeRef.current || sttStreamRef.current || sttCtxRef.current);
     socket?.emit("stt:stop");
-    sttOffRef.current?.();
-    sttOffRef.current = null;
     try { sttNodeRef.current?.disconnect(); } catch { /* ignore */ }
     sttNodeRef.current = null;
     sttStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -141,19 +172,30 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
     const ctx = sttCtxRef.current;
     sttCtxRef.current = null;
     if (ctx && ctx.state !== "closed") ctx.close().catch(() => {});
-    onStopRef.current?.();
+    if (!wasCapturing) return; // 多重呼び出し（既に停止済み）
+    // 遅れて届く確定テキスト(stt:final)を3秒待ってから onStop（リスナーは常設のまま）。
+    if (sttDrainTimerRef.current) clearTimeout(sttDrainTimerRef.current);
+    sttDrainTimerRef.current = setTimeout(() => {
+      sttDrainTimerRef.current = null;
+      onStopRef.current?.();
+    }, 3000);
   }, []);
 
   const startStreaming = useCallback(async () => {
     const socket = getSocketRef.current?.();
     if (!socket) { setError("サーバーに接続できていません。少し待って再度お試しください。"); return; }
+    if (sttStreamRef.current) return; // 既に稼働中（二重開始防止）
+    if (sttDrainTimerRef.current) { clearTimeout(sttDrainTimerRef.current); sttDrainTimerRef.current = null; }
+    const gen = ++sttGenRef.current;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (sttGenRef.current !== gen) { stream.getTracks().forEach((t) => t.stop()); return; } // 開始中に停止された
       sttStreamRef.current = stream;
       const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       const ctx = new AC({ sampleRate: 16000 });
       sttCtxRef.current = ctx;
       await ctx.audioWorklet.addModule("/stt-worklet.js");
+      if (sttGenRef.current !== gen) return; // 停止済み（後始末は stopStreaming が実施済み）
       const source = ctx.createMediaStreamSource(stream);
       const node = new AudioWorkletNode(ctx, "stt-processor");
       sttNodeRef.current = node;
@@ -165,20 +207,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
       node.connect(mute);
       mute.connect(ctx.destination);
 
-      const onInterim = (p: { transcript?: string }) => { if (activeRef.current) onInterimRef.current?.(p.transcript ?? ""); };
-      const onFinal = (p: { transcript?: string }) => {
-        if (activeRef.current && p.transcript) { onInterimRef.current?.(""); onFinalRef.current?.(p.transcript); }
-      };
-      const onErr = (p: { message?: string }) => { setError(p?.message ? `音声認識エラー: ${p.message}` : "音声認識エラー"); };
-      socket.on("stt:interim", onInterim);
-      socket.on("stt:final", onFinal);
-      socket.on("stt:error", onErr);
-      sttOffRef.current = () => {
-        socket.off("stt:interim", onInterim);
-        socket.off("stt:final", onFinal);
-        socket.off("stt:error", onErr);
-      };
-
+      ensureSttListeners(socket);
       socket.emit("stt:start", { lang: langRef.current });
       activeRef.current = true;
       setListening(true);
@@ -191,7 +220,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
       );
       stopStreaming();
     }
-  }, [stopStreaming]);
+  }, [stopStreaming, ensureSttListeners]);
 
   // ── Web Speech API: core recognition instance ──────────────────────────────
   const startInternal = useCallback(() => {
@@ -344,6 +373,8 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
       try { rec?.stop(); } catch { /* ignore */ }
       gstStreamRef.current?.getTracks().forEach((t) => t.stop());
       // streaming teardown
+      sttGenRef.current++;
+      if (sttDrainTimerRef.current) clearTimeout(sttDrainTimerRef.current);
       sttOffRef.current?.();
       sttNodeRef.current?.disconnect();
       sttStreamRef.current?.getTracks().forEach((t) => t.stop());
