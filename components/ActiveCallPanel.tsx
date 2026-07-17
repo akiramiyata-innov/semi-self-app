@@ -62,10 +62,26 @@ export function ActiveCallPanel({
 
   return (
     <div
-      className={`flex flex-col h-full bg-white rounded-xl border-2 shadow overflow-hidden transition-colors ${
-        isCapturing ? "border-purple-400 shadow-purple-100" : "border-gray-200"
+      className={`flex flex-col h-full bg-white rounded-xl border-2 shadow overflow-hidden transition-all ${
+        isListening
+          ? "border-red-500 ring-4 ring-red-300/60 shadow-lg shadow-red-200"
+          : isCapturing
+          ? "border-purple-400 shadow-purple-100"
+          : "border-gray-200"
       }`}
     >
+      {/* マイクON 大きく目立つバナー（あなたの声がお客様に届いている状態） */}
+      {isListening && (
+        <div className="flex items-center justify-center gap-2.5 bg-red-600 text-white px-4 py-2.5 shrink-0">
+          <span className="relative flex h-3 w-3 shrink-0">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-200 opacity-75" />
+            <span className="relative inline-flex rounded-full h-3 w-3 bg-white" />
+          </span>
+          <Mic size={18} className="shrink-0" />
+          <span className="font-bold text-sm sm:text-base tracking-wide">マイクON　あなたの声がお客様に届いています</span>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 bg-green-50 border-b border-green-200 flex-wrap gap-2">
         <div className="flex items-center gap-2 flex-wrap">
@@ -94,9 +110,9 @@ export function ActiveCallPanel({
           )}
 
           {isListening && (
-            <span className="flex items-center gap-1 bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+            <span className="flex items-center gap-1 bg-red-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
               <span className="relative flex h-1.5 w-1.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-200 opacity-75" />
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-200 opacity-75" />
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-white" />
               </span>
               録音中
@@ -109,7 +125,7 @@ export function ActiveCallPanel({
             onClick={onToggleMic}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               isListening
-                ? "bg-blue-500 text-white hover:bg-blue-600"
+                ? "bg-red-500 text-white hover:bg-red-600 ring-2 ring-red-300"
                 : "bg-gray-200 text-gray-600 hover:bg-gray-300"
             }`}
             title={isListening ? "マイクOFF (Space)" : "マイクON (Space)"}
