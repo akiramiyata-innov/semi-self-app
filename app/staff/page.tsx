@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { io, Socket } from "socket.io-client";
-import { Wifi, WifiOff, Monitor, Mic, ClipboardList, Users, ChevronDown, Mail, LogOut, MapPin, KeyRound, BookOpen, Map as MapIcon } from "lucide-react";
+import { Wifi, WifiOff, Monitor, Mic, ClipboardList, Users, ChevronDown, Mail, LogOut, MapPin, KeyRound, BookOpen, Map as MapIcon, MessageSquare } from "lucide-react";
 import { CallQueueItem } from "@/components/CallQueueItem";
 import { ActiveCallPanel } from "@/components/ActiveCallPanel";
 import { Toast } from "@/components/Toast";
@@ -166,6 +166,28 @@ export default function StaffPage() {
     };
   }, [showMicTest]);
 
+  // 定型文（よく使う文をボタン1つで送信・スタッフ個人用・サーバー保存）
+  const [quickReplies, setQuickReplies] = useState<string[]>([]);
+  const [showQuickReplies, setShowQuickReplies] = useState(false);
+  const [qrDraft, setQrDraft] = useState<string[]>([]); // 設定パネルを開いている間の編集用コピー
+  const [savingQr, setSavingQr] = useState(false);
+  const [qrSaved, setQrSaved] = useState(false); // 直近の保存が成功したか（「保存しました」表示用）
+
+  const saveQuickReplies = useCallback(async () => {
+    setSavingQr(true);
+    const cleaned = qrDraft.map((s) => s.trim()).filter((s) => s.length > 0);
+    const res = await fetch("/api/staff/quick-replies/me", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phrases: cleaned }),
+    }).then((r) => r.json()).catch(() => null);
+    const saved = res?.phrases ?? cleaned;
+    setSavingQr(false);
+    setQuickReplies(saved);
+    setQrDraft(saved); // サーバーで正規化（重複・空文字除去）した内容を編集欄にも反映
+    setQrSaved(true); // パネルは閉じない。「閉じる」を押したときだけ閉じる
+  }, [qrDraft]);
+
   const addToast = useCallback((message: string, type: ToastItem["type"] = "info") => {
     const id = Date.now().toString();
     setToasts((prev) => [...prev, { id, message, type }]);
@@ -187,7 +209,8 @@ export default function StaffPage() {
       fetch("/api/auth/me").then((r) => r.json()).catch(() => null),
       fetch("/api/staff/assignments/me").then((r) => r.json()).catch(() => null),
       fetch("/api/admin/stations").then((r) => r.json()).catch(() => null),
-    ]).then(([info, assignments, stationsData]) => {
+      fetch("/api/staff/quick-replies/me").then((r) => r.json()).catch(() => null),
+    ]).then(([info, assignments, stationsData, quickReplyData]) => {
       if (!info?.uid) {
         // 有効なセッションが無い → ログインへ（名前入力画面は出さない）
         window.location.href = "/staff/login";
@@ -204,6 +227,7 @@ export default function StaffPage() {
         myStationIdsRef.current = assignments.stationIds;
       }
       if (stationsData?.stations) setStations(stationsData.stations);
+      if (Array.isArray(quickReplyData?.phrases)) setQuickReplies(quickReplyData.phrases);
       setInitialDataLoaded(true);
     });
   }, []);
@@ -817,10 +841,16 @@ export default function StaffPage() {
                     {/* メニュー項目 */}
                     <div className="py-1">
                       <button
-                        onClick={() => { setShowMicTest(true); setShowSettings(false); setShowPwForm(false); setShowAccountMenu(false); }}
+                        onClick={() => { setShowMicTest(true); setShowSettings(false); setShowPwForm(false); setShowQuickReplies(false); setShowAccountMenu(false); }}
                         className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
                       >
                         <Mic size={15} className="text-gray-400" /> マイクテスト
+                      </button>
+                      <button
+                        onClick={() => { setQrDraft(quickReplies); setQrSaved(false); setShowQuickReplies(true); setShowSettings(false); setShowPwForm(false); setShowMicTest(false); setShowAccountMenu(false); }}
+                        className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
+                      >
+                        <MessageSquare size={15} className="text-gray-400" /> 定型文設定
                       </button>
                       {CALL_LOGS_ENABLED ? (
                         <Link
@@ -839,13 +869,13 @@ export default function StaffPage() {
                         </div>
                       )}
                       <button
-                        onClick={() => { setShowSettings(true); setShowPwForm(false); setShowMicTest(false); setShowAccountMenu(false); }}
+                        onClick={() => { setShowSettings(true); setShowPwForm(false); setShowMicTest(false); setShowQuickReplies(false); setShowAccountMenu(false); }}
                         className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
                       >
                         <MapPin size={15} className="text-gray-400" /> 担当駅設定
                       </button>
                       <button
-                        onClick={() => { setShowPwForm(true); setShowSettings(false); setShowMicTest(false); setPwMsg(""); setNewPw(""); setShowAccountMenu(false); }}
+                        onClick={() => { setShowPwForm(true); setShowSettings(false); setShowMicTest(false); setShowQuickReplies(false); setPwMsg(""); setNewPw(""); setShowAccountMenu(false); }}
                         className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
                       >
                         <KeyRound size={15} className="text-gray-400" /> パスワード変更
@@ -999,6 +1029,62 @@ export default function StaffPage() {
             </button>
           </div>
         )}
+
+        {/* 定型文の登録・編集パネル */}
+        {showQuickReplies && (
+          <div className="mt-3 p-3 bg-indigo-50 border border-indigo-200 rounded-lg">
+            <p className="text-xs font-semibold text-indigo-700 mb-2">定型文の登録（よく使う文をボタンで送信）</p>
+            <div className="space-y-1.5 mb-2 max-h-60 overflow-y-auto">
+              {qrDraft.length === 0 ? (
+                <p className="text-xs text-gray-400">まだ定型文がありません。「＋ 追加」で登録してください。</p>
+              ) : (
+                qrDraft.map((phrase, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={phrase}
+                      onChange={(e) => { setQrDraft((prev) => prev.map((p, j) => (j === i ? e.target.value : p))); setQrSaved(false); }}
+                      placeholder="例：定期券の払い戻しは窓口で承ります"
+                      maxLength={200}
+                      className="flex-1 px-3 py-1.5 border border-gray-300 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    />
+                    <button
+                      onClick={() => { setQrDraft((prev) => prev.filter((_, j) => j !== i)); setQrSaved(false); }}
+                      title="削除"
+                      className="px-2 py-1 text-red-500 border border-red-200 rounded-lg text-sm leading-none hover:bg-red-50 shrink-0"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="flex gap-2 items-center">
+              <button
+                onClick={() => { setQrDraft((prev) => [...prev, ""]); setQrSaved(false); }}
+                disabled={qrDraft.length >= 30}
+                className="px-3 py-1 text-indigo-600 border border-indigo-300 text-xs rounded-lg hover:bg-white disabled:opacity-50"
+              >
+                ＋ 追加
+              </button>
+              <div className="flex-1" />
+              {qrSaved && <span className="text-xs text-green-600">✓ 保存しました</span>}
+              <button
+                onClick={saveQuickReplies}
+                disabled={savingQr}
+                className="px-3 py-1 bg-indigo-600 text-white text-xs rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {savingQr ? "保存中..." : "保存"}
+              </button>
+              <button
+                onClick={() => setShowQuickReplies(false)}
+                className="px-3 py-1 text-gray-500 border border-gray-300 text-xs rounded-lg hover:bg-white"
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        )}
       </header>
 
       {/* Call Queue */}
@@ -1055,6 +1141,7 @@ export default function StaffPage() {
                   isListening={isListening}
                   isCapturing={capturing && captureSessionRef.current === session.sessionId}
                   micError={micError}
+                  quickReplies={quickReplies}
                   onToggleMic={() => toggleMic(session.sessionId)}
                   onToggleScreenShare={() => toggleScreenShare(session.sessionId)}
                   onEnd={() => endSession(session.sessionId)}

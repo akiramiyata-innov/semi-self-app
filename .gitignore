@@ -42,3 +42,6 @@ next-env.d.ts
 
 # call logs
 /logs
+
+# per-staff quick replies (user data; GCS in prod)
+/quick-replies

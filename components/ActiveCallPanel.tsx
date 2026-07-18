@@ -24,6 +24,8 @@ interface ActiveCallPanelProps {
   onEnd: () => void;
   /** Called when staff submits text manually (fallback for mic) */
   onSendText?: (text: string) => void;
+  /** Staff's saved quick-reply phrases, shown as one-tap send buttons. */
+  quickReplies?: string[];
 }
 
 export function ActiveCallPanel({
@@ -40,6 +42,7 @@ export function ActiveCallPanel({
   onToggleScreenShare,
   onEnd,
   onSendText,
+  quickReplies,
 }: ActiveCallPanelProps) {
   const [inputText, setInputText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -185,6 +188,24 @@ export function ActiveCallPanel({
           </div>
         )}
       </div>
+
+      {/* ── Quick-reply buttons (one-tap send of saved phrases) ── */}
+      {quickReplies && quickReplies.length > 0 && (
+        <div className="border-t border-gray-200 px-3 pt-2 bg-gray-50 shrink-0">
+          <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+            {quickReplies.map((phrase, i) => (
+              <button
+                key={i}
+                onClick={() => onSendText?.(phrase)}
+                title={phrase}
+                className="shrink-0 max-w-[220px] truncate px-2.5 py-1 bg-white border border-indigo-200 text-indigo-700 text-xs rounded-full hover:bg-indigo-50 transition-colors"
+              >
+                {phrase}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Text input fallback ── */}
       <div className="border-t border-gray-200 px-3 py-2 bg-gray-50 shrink-0">
