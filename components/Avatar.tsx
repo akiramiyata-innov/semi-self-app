@@ -95,20 +95,75 @@ export function Avatar({
 
   useEffect(() => stopMouth, [stopMouth]);
 
+  // Decoded TTS segments waiting to play, strictly in arrival order. Long staff
+  // speech arrives as MULTIPLE audio segments (one per STT final, ~every 30-60s
+  // of continuous talk); playing each the moment it arrived overlapped the
+  // voices, and the old source's `ended` event killed the mouth timer of the
+  // newer one — lip sync died mid-audio (bug found in v1.14.0 with ~3min input).
+  const queueRef = useRef<AudioBuffer[]>([]);
+  // Serializes decodeAudioData calls so segments enqueue in arrival order even
+  // when a later (smaller) segment would decode faster than an earlier one.
+  const decodeChainRef = useRef<Promise<void>>(Promise.resolve());
+
   // Silence the audio when the avatar unmounts — e.g. the user presses キャンセル
   // mid-sentence. Without this the Web Audio source keeps playing to the end even
   // though the call screen has already closed. (The shared AudioContext is left
   // open on purpose so it stays unlocked for the next call.)
   useEffect(() => {
     return () => {
+      queueRef.current = []; // drop queued segments so onended can't chain on
       const src = sourceRef.current;
       if (src) {
-        src.onended = null; // avoid stopSpeaking firing on the unmounted component
+        src.onended = null; // avoid playNext firing on the unmounted component
         try { src.stop(); } catch { /* already stopped */ }
         sourceRef.current = null;
       }
     };
   }, []);
+
+  /** Play the next queued segment; called again by each source's `ended`. */
+  const playNext = useCallback((ctx: AudioContext) => {
+    const buffer = queueRef.current.shift();
+    if (!buffer) {
+      // Queue drained — now (and only now) the avatar stops "speaking".
+      sourceRef.current = null;
+      setSpeaking(false);
+      onSpeakingRef.current?.(false);
+      stopMouth();
+      return;
+    }
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    const samples = new Uint8Array(analyser.fftSize);
+    source.connect(analyser);
+    analyser.connect(ctx.destination);
+
+    source.onended = () => playNext(ctx);
+    sourceRef.current = source;
+    setSpeaking(true);
+    onSpeakingRef.current?.(true);
+    source.start();
+
+    // Fresh mouth timer bound to THIS source's analyser.
+    stopMouth();
+    let smoothedRms = 0;
+    mouthTimerRef.current = setInterval(() => {
+      analyser.getByteTimeDomainData(samples);
+      let sum = 0;
+      for (let i = 0; i < samples.length; i++) {
+        const v = (samples[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / samples.length);
+      smoothedRms += (rms - smoothedRms) * MOUTH_SMOOTHING;
+      const next = mouthForLevel(smoothedRms);
+      setMouth((prev) => (prev === next ? prev : next));
+    }, MOUTH_TICK_MS);
+  }, [stopMouth]);
 
   // --- Play via Web Audio API (Google TTS base64) ---
   // Google TTS is the only voice — there is deliberately no Web Speech fallback,
@@ -118,71 +173,30 @@ export function Avatar({
   useEffect(() => {
     if (!audioBase64) return;
 
-    const startSpeaking = () => {
-      setSpeaking(true);
-      onSpeakingRef.current?.(true);
-    };
-    const stopSpeaking = () => {
-      sourceRef.current = null;
-      setSpeaking(false);
-      onSpeakingRef.current?.(false);
-      stopMouth();
-    };
-
     // Reuse the shared context that was unlocked on the user's tap (see
     // lib/audioUnlock). Creating a fresh context here instead would start it
     // suspended — browsers only let audio play from a gesture-unlocked context.
     const ctx = getSharedAudioContext();
     if (!ctx) return;
 
-    const play = async () => {
-      try {
+    decodeChainRef.current = decodeChainRef.current
+      .then(async () => {
         if (ctx.state === "suspended") await ctx.resume();
 
         const binary = atob(audioBase64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
-        ctx.decodeAudioData(bytes.buffer.slice(0), (buffer) => {
-          const source = ctx.createBufferSource();
-          source.buffer = buffer;
-
-          const analyser = ctx.createAnalyser();
-          analyser.fftSize = 1024;
-          const samples = new Uint8Array(analyser.fftSize);
-          source.connect(analyser);
-          analyser.connect(ctx.destination);
-
-          source.onended = stopSpeaking;
-          sourceRef.current = source;
-          startSpeaking();
-          source.start();
-
-          stopMouth();
-          let smoothedRms = 0;
-          mouthTimerRef.current = setInterval(() => {
-            analyser.getByteTimeDomainData(samples);
-            let sum = 0;
-            for (let i = 0; i < samples.length; i++) {
-              const v = (samples[i] - 128) / 128;
-              sum += v * v;
-            }
-            const rms = Math.sqrt(sum / samples.length);
-            smoothedRms += (rms - smoothedRms) * MOUTH_SMOOTHING;
-            const next = mouthForLevel(smoothedRms);
-            setMouth((prev) => (prev === next ? prev : next));
-          }, MOUTH_TICK_MS);
-        }, (err) => {
-          console.error("[avatar] audio decode failed:", err);
-        });
-      } catch (e) {
-        console.error("[avatar] audio playback failed:", e);
-      }
-    };
-
-    play();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioBase64]);
+        const buffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
+        queueRef.current.push(buffer);
+        // Idle → start playing; otherwise the current source's `ended` chain
+        // picks this segment up in order.
+        if (!sourceRef.current) playNext(ctx);
+      })
+      .catch((e) => {
+        console.error("[avatar] audio decode/playback failed:", e);
+      });
+  }, [audioBase64, playNext]);
 
   if (!visible) return null;
 
