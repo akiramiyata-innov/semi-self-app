@@ -109,6 +109,63 @@ export default function StaffPage() {
   const [savingPw, setSavingPw] = useState(false);
   const [pwMsg, setPwMsg] = useState("");
 
+  // マイクテスト（接客前の音量チェック）
+  const [showMicTest, setShowMicTest] = useState(false);
+  const [micLevel, setMicLevel] = useState(0); // 0-100
+  const [micTestErr, setMicTestErr] = useState<string | null>(null);
+  const micTestStreamRef = useRef<MediaStream | null>(null);
+  const micTestCtxRef = useRef<AudioContext | null>(null);
+  const micTestRafRef = useRef<number | null>(null);
+
+  // マイクテストパネルの開閉に合わせて音量メーターを起動/停止
+  useEffect(() => {
+    if (!showMicTest) return;
+    let cancelled = false;
+    setMicTestErr(null);
+    setMicLevel(0);
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
+        micTestStreamRef.current = stream;
+        const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        const ctx = new Ctx();
+        micTestCtxRef.current = ctx;
+        await ctx.resume().catch(() => {});
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        source.connect(analyser);
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        const tick = () => {
+          analyser.getByteTimeDomainData(data);
+          let sum = 0;
+          for (let i = 0; i < data.length; i++) {
+            const v = (data[i] - 128) / 128;
+            sum += v * v;
+          }
+          const rms = Math.sqrt(sum / data.length); // 0..1
+          setMicLevel(Math.min(100, Math.round(rms * 300)));
+          micTestRafRef.current = requestAnimationFrame(tick);
+        };
+        micTestRafRef.current = requestAnimationFrame(tick);
+      } catch (e) {
+        const err = e as DOMException;
+        setMicTestErr(err?.name || "不明なエラー");
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (micTestRafRef.current) cancelAnimationFrame(micTestRafRef.current);
+      micTestRafRef.current = null;
+      micTestStreamRef.current?.getTracks().forEach((t) => t.stop());
+      micTestStreamRef.current = null;
+      micTestCtxRef.current?.close().catch(() => {});
+      micTestCtxRef.current = null;
+      setMicLevel(0);
+    };
+  }, [showMicTest]);
+
   const addToast = useCallback((message: string, type: ToastItem["type"] = "info") => {
     const id = Date.now().toString();
     setToasts((prev) => [...prev, { id, message, type }]);
@@ -760,20 +817,10 @@ export default function StaffPage() {
                     {/* メニュー項目 */}
                     <div className="py-1">
                       <button
-                        onClick={async () => {
-                          setShowAccountMenu(false);
-                          try {
-                            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                            stream.getTracks().forEach((t) => t.stop());
-                            alert("✅ マイクの許可が確認できました。");
-                          } catch (e: unknown) {
-                            const err = e as DOMException;
-                            alert(`❌ マイクエラー: ${err.name}`);
-                          }
-                        }}
+                        onClick={() => { setShowMicTest(true); setShowSettings(false); setShowPwForm(false); setShowAccountMenu(false); }}
                         className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
                       >
-                        <Mic size={15} className="text-gray-400" /> マイク許可確認
+                        <Mic size={15} className="text-gray-400" /> マイクテスト
                       </button>
                       {CALL_LOGS_ENABLED ? (
                         <Link
@@ -792,13 +839,13 @@ export default function StaffPage() {
                         </div>
                       )}
                       <button
-                        onClick={() => { setShowSettings(true); setShowPwForm(false); setShowAccountMenu(false); }}
+                        onClick={() => { setShowSettings(true); setShowPwForm(false); setShowMicTest(false); setShowAccountMenu(false); }}
                         className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
                       >
                         <MapPin size={15} className="text-gray-400" /> 担当駅設定
                       </button>
                       <button
-                        onClick={() => { setShowPwForm(true); setShowSettings(false); setPwMsg(""); setNewPw(""); setShowAccountMenu(false); }}
+                        onClick={() => { setShowPwForm(true); setShowSettings(false); setShowMicTest(false); setPwMsg(""); setNewPw(""); setShowAccountMenu(false); }}
                         className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
                       >
                         <KeyRound size={15} className="text-gray-400" /> パスワード変更
@@ -917,6 +964,39 @@ export default function StaffPage() {
               </button>
             </div>
             {pwMsg && <p className={`text-xs mt-1 ${pwMsg.includes("変更しました") ? "text-green-600" : "text-red-500"}`}>{pwMsg}</p>}
+          </div>
+        )}
+
+        {/* マイクテストパネル（接客前の音量チェック） */}
+        {showMicTest && (
+          <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+            <p className="text-xs font-semibold text-green-700 mb-2">マイクテスト</p>
+            {micTestErr ? (
+              <p className="text-xs text-red-500 mb-2">
+                ❌ マイクを使用できません（{micTestErr}）。ブラウザのマイク許可設定をご確認ください。
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-gray-500 mb-2">
+                  マイクに向かって話してください。緑のバーが動けばマイクは正常です。
+                </p>
+                <div className="h-4 w-full bg-gray-200 rounded-full overflow-hidden mb-1">
+                  <div
+                    className={`h-full transition-[width] duration-75 ${micLevel > 8 ? "bg-green-500" : "bg-gray-300"}`}
+                    style={{ width: `${micLevel}%` }}
+                  />
+                </div>
+                <p className="text-[11px] text-gray-400 mb-2">
+                  {micLevel > 8 ? "🎤 音を検出しています" : "…静かです（話すと動きます）"}
+                </p>
+              </>
+            )}
+            <button
+              onClick={() => setShowMicTest(false)}
+              className="px-3 py-1 text-gray-500 border border-gray-300 text-xs rounded-lg hover:bg-white"
+            >
+              閉じる
+            </button>
           </div>
         )}
       </header>
