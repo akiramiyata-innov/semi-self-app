@@ -12,9 +12,35 @@ import { getGlossaryTermsFresh } from "../lib/glossaryClient";
 import { getAssignmentsFresh } from "../lib/assignmentClient";
 import type { GlossaryTerm } from "../lib/types";
 import { registerSttHandlers } from "./sttStream";
+import { verifySessionToken, SESSION_COOKIE_NAME } from "../lib/session";
+import type { SessionPayload } from "../lib/session";
 
 function getApiKey(): string {
   return process.env.GOOGLE_API_KEY || "";
+}
+
+// Pull a single cookie value out of a raw Cookie header (no cookie lib needed).
+function parseCookie(header: string | undefined, name: string): string | undefined {
+  if (!header) return undefined;
+  for (const part of header.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx < 0) continue;
+    if (part.slice(0, idx).trim() === name) return decodeURIComponent(part.slice(idx + 1).trim());
+  }
+  return undefined;
+}
+
+// The verified staff session attached to a socket at connection time (null for
+// anonymous kiosk connections). Staff-only events require this to be present.
+function getStaffSession(socket: Socket): SessionPayload | null {
+  return (socket.data?.session as SessionPayload | null) ?? null;
+}
+
+// Log folder date in JST (UTC+9, no DST) so a call at 08:00 JST files under that
+// day, not the previous UTC day. Reading tolerates either since listing scans all
+// date folders, but new logs should be filed by Japan calendar date.
+function jstDateString(ms: number): string {
+  return new Date(ms + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 // ── Staff presence ────────────────────────────────────────────────────────────
@@ -75,7 +101,7 @@ async function saveSessionLog(session: ActiveSession): Promise<void> {
     durationSeconds: Math.round((endedAt - session.startedAt) / 1000),
     transcript: session.transcript,
   };
-  const date = new Date(endedAt).toISOString().slice(0, 10);
+  const date = jstDateString(endedAt);
 
   if (isGCSEnabled()) {
     try {
@@ -167,13 +193,21 @@ async function translateText(text: string, from: string, to: string): Promise<st
 
 async function translateWithGlossary(text: string, fromLang: string, toLang: string): Promise<string> {
   const terms = await getGlossaryTermsFresh();
+  // Replace longer source terms first so a short term (e.g. 東京) can't consume
+  // part of a longer one (東京駅) before it gets its own fixed translation.
+  const entries = terms
+    .map((term: GlossaryTerm) => ({
+      src: term[fromLang as keyof GlossaryTerm] as string | undefined,
+      tgt: term[toLang as keyof GlossaryTerm] as string | undefined,
+    }))
+    .filter((e): e is { src: string; tgt: string } => !!e.src && !!e.tgt)
+    .sort((a, b) => b.src.length - a.src.length);
+
   const replacements: Array<{ placeholder: string; target: string }> = [];
   let processed = text;
 
-  terms.forEach((term: GlossaryTerm, i: number) => {
-    const src = term[fromLang as keyof GlossaryTerm] as string | undefined;
-    const tgt = term[toLang as keyof GlossaryTerm] as string | undefined;
-    if (src && tgt && processed.includes(src)) {
+  entries.forEach(({ src, tgt }, i) => {
+    if (processed.includes(src)) {
       const placeholder = `GLOSS${i}TERM`;
       processed = processed.split(src).join(placeholder);
       replacements.push({ placeholder, target: tgt });
@@ -320,6 +354,21 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     path: "/socket.io",
   });
 
+  // Attach the verified staff session (from the login cookie) to each socket at
+  // connection time. Kiosk (user) connections have no cookie → session stays null;
+  // they keep working. Staff-only events below require a non-null session, so an
+  // anonymous socket can no longer register as staff, answer calls, or speak as an
+  // attendant just by knowing the event names.
+  io.use(async (socket, next) => {
+    try {
+      const token = parseCookie(socket.handshake.headers.cookie, SESSION_COOKIE_NAME);
+      socket.data.session = token ? await verifySessionToken(token) : null;
+    } catch {
+      socket.data.session = null;
+    }
+    next();
+  });
+
   io.on("connection", (socket: Socket) => {
 
     // ── Streaming STT (real-time, glossary-aware, long-form) ──────────────────
@@ -327,10 +376,15 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
     // ── Staff joins ───────────────────────────────────────────────────────────
     socket.on("staff:join", async (payload?: { name?: string; uid?: string; stationIds?: string[] }) => {
-      const name = (payload?.name ?? "").trim() || "スタッフ";
-      const uid = payload?.uid ?? "";
+      // Identity comes from the verified login session, not the client payload —
+      // otherwise anyone could register as staff (or as someone else) over the socket.
+      const session = getStaffSession(socket);
+      if (!session) { console.warn(`[staff:join] rejected: unauthenticated socket ${socket.id}`); return; }
+      const uid = session.uid;
+      const name = (session.name || session.email || "スタッフ").trim();
 
-      // stationIds が直接渡された場合はそれを優先（キャッシュ遅延を回避）
+      // stationIds が直接渡された場合はそれを優先（キャッシュ遅延を回避）。認証済みスタッフが
+      // 自分の担当駅を渡すだけなので信頼してよい。未指定ならサーバー側の最新を読む。
       const assignedStations = payload?.stationIds ?? (uid ? await getAssignmentsFresh(uid).catch(() => []) : []);
 
       // Re-register (handles reconnect or name change)
@@ -432,6 +486,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
     // ── Staff answers a call ──────────────────────────────────────────────────
     socket.on("call:answer", async (payload: { sessionId: string }) => {
+      // Only an authenticated staff socket may answer (take ownership of) a call.
+      if (!getStaffSession(socket)) return;
       const { sessionId } = payload;
       const record = callQueue.get(sessionId);
 
@@ -478,6 +534,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
     // ── Staff rejects a call ──────────────────────────────────────────────────
     socket.on("call:reject", (payload: { sessionId: string }) => {
+      // Only an authenticated staff socket may reject/dismiss a queued call.
+      if (!getStaffSession(socket)) return;
       const { sessionId } = payload;
       const record = callQueue.get(sessionId);
       if (!record) return;
@@ -513,6 +571,9 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         const { sessionId, text, lang, isFinal } = payload;
         const session = activeSessions.get(sessionId);
         if (!session) return;
+        // Only the kiosk user of this session may speak as the user — blocks a
+        // third party who knows the sessionId from injecting customer messages.
+        if (session.userSocketId !== socket.id) return;
 
         if (lang !== session.userLang) session.userLang = lang;
 
@@ -607,6 +668,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       const { sessionId, frameData } = payload;
       const session = activeSessions.get(sessionId);
       if (!session) return;
+      // Only the staff who owns this session may share their screen into it.
+      if (session.staffSocketId !== socket.id) return;
       socket.to(`session:${sessionId}`).emit("screen:share", { sessionId, frameData });
     });
 
@@ -616,6 +679,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
       const session = activeSessions.get(sessionId);
       if (session) {
+        // Only the session's kiosk user may send its camera frames.
+        if (session.userSocketId !== socket.id) return;
         io.to(session.staffSocketId).emit("screen:frame", { sessionId, frameData, camera });
         return;
       }
@@ -624,6 +689,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       // member who can see this call's incoming card (same eligibility as call:incoming).
       const pending = callQueue.get(sessionId);
       if (!pending) return;
+      // Only the caller may send preview frames for their own pending call.
+      if (pending.userSocketId !== socket.id) return;
       getEligibleStaffSocketIds(pending.stationId).forEach((sid) => {
         io.to(sid).emit("screen:frame", { sessionId, frameData, camera });
       });
@@ -632,7 +699,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     // ── Language update ───────────────────────────────────────────────────────
     socket.on("session:setLang", (payload: { sessionId: string; lang: LangCode }) => {
       const session = activeSessions.get(payload.sessionId);
-      if (session) session.userLang = payload.lang;
+      if (session && session.userSocketId === socket.id) session.userLang = payload.lang;
     });
 
     // ── Disconnect cleanup ────────────────────────────────────────────────────
