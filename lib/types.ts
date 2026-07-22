@@ -30,6 +30,14 @@ export interface TranscriptEntry {
   timestamp: number;
 }
 
+/** 性能検証テスト用の自動測定値（server/metrics.ts が記録）。単位はミリ秒。 */
+export interface SessionMetrics {
+  callAnswerDelayMs?: number;
+  sttFinalDelaysMs: number[];
+  ttsDelaysMs: number[];
+  disconnects: number;
+}
+
 export interface SessionLog {
   sessionId: string;
   machineId: string;
@@ -39,6 +47,8 @@ export interface SessionLog {
   endedAt: number;
   durationSeconds: number;
   transcript: TranscriptEntry[];
+  /** 自動測定値。性能検証で使用（通常運用では参照されない）。 */
+  metrics?: SessionMetrics;
 }
 
 export interface SessionSummary {

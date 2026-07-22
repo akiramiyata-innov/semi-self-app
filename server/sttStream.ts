@@ -4,6 +4,7 @@ import { getSpeechClient, RECOGNIZER, SPEECH_MODEL } from "../lib/speechClient";
 import { getGlossaryTermsFresh } from "../lib/glossaryClient";
 import type { GlossaryTerm } from "../lib/types";
 import { buildReadingMap, applyReadingMatch, warmUpTokenizer, type ReadingEntry } from "../lib/reading";
+import { noteSttAudio, noteSttFinal } from "./metrics";
 
 // Google streaming recognition has a per-stream time limit. Reopen the stream
 // before then so long (2 min+) speech continues seamlessly.
@@ -151,6 +152,7 @@ export function registerSttHandlers(socket: Socket): void {
         // 確定時のみ、読み照合（kuromoji）で同音の別漢字も矯正する。
         const transcript = await applyReadingMatch(base, readingMap);
         socket.emit("stt:final", { transcript });
+        noteSttFinal(socket.id); // 性能測定：発話終了→確定テキスト
       } else {
         socket.emit("stt:interim", { transcript: base });
       }
@@ -207,6 +209,7 @@ export function registerSttHandlers(socket: Socket): void {
 
   socket.on("stt:audio", (chunk: ArrayBuffer | Buffer) => {
     if (!stream) return;
+    noteSttAudio(socket.id); // 性能測定：最後に音声が届いた時刻＝発話終了の目安
     try {
       stream.write({ audio: Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk) });
     } catch { /* stream closing */ }

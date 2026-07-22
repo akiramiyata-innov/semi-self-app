@@ -14,6 +14,7 @@ import type { GlossaryTerm } from "../lib/types";
 import { registerSttHandlers } from "./sttStream";
 import { verifySessionToken, SESSION_COOKIE_NAME } from "../lib/session";
 import type { SessionPayload } from "../lib/session";
+import * as metrics from "./metrics";
 
 function getApiKey(): string {
   return process.env.GOOGLE_API_KEY || "";
@@ -100,6 +101,7 @@ async function saveSessionLog(session: ActiveSession): Promise<void> {
     endedAt,
     durationSeconds: Math.round((endedAt - session.startedAt) / 1000),
     transcript: session.transcript,
+    metrics: metrics.takeMetrics(session.sessionId),
   };
   const date = jstDateString(endedAt);
 
@@ -359,6 +361,14 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
   // they keep working. Staff-only events below require a non-null session, so an
   // anonymous socket can no longer register as staff, answer calls, or speak as an
   // attendant just by knowing the event names.
+  // 自動測定が socketId から通話を特定できるようにする（キオスク側・係員側の双方）。
+  metrics.setSessionResolver((socketId) => {
+    for (const [sessionId, s] of activeSessions) {
+      if (s.userSocketId === socketId || s.staffSocketId === socketId) return sessionId;
+    }
+    return null;
+  });
+
   io.use(async (socket, next) => {
     try {
       const token = parseCookie(socket.handshake.headers.cookie, SESSION_COOKIE_NAME);
@@ -465,6 +475,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         stationId: stationId ?? "",
         timestamp: Date.now(),
       };
+      metrics.noteCallRequest(sessionId);
       callQueue.set(sessionId, record);
       socket.join(`session:${sessionId}`);
       // Let the user client know its sessionId before any answer, so it can tag
@@ -482,6 +493,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       eligibleStaffSocketIds.forEach((sid) => {
         io.to(sid).emit("call:incoming", incomingPayload);
       });
+      metrics.noteCallIncoming(sessionId);
     });
 
     // ── Staff answers a call ──────────────────────────────────────────────────
@@ -617,6 +629,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         let translatedText: string | undefined;
         let audioBase64 = "";
 
+        if (isFinal) metrics.noteStaffSpeechFinal(sessionId);
+
         if (!isFinal) {
           io.to(session.staffSocketId).emit("speech:staff", { sessionId, text, isFinal: false });
           io.to(session.userSocketId).emit("speech:staff", {
@@ -650,6 +664,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
         if (audioBase64) {
           io.to(session.userSocketId).emit("tts:audio", { sessionId, audioBase64, lang: userLang });
+          metrics.noteTtsSent(sessionId);
         }
 
         session.transcript.push({
@@ -705,9 +720,12 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     // ── Disconnect cleanup ────────────────────────────────────────────────────
     socket.on("disconnect", () => {
       staffMap.delete(socket.id);
+      metrics.clearSttSocket(socket.id);
 
       activeSessions.forEach((session, sessionId) => {
         if (session.staffSocketId === socket.id || session.userSocketId === socket.id) {
+          // 通話中の切断＝性能指標。ログ保存より前に記録する（保存時に取り出すため）。
+          metrics.noteDisconnect(sessionId);
           saveSessionLog(session).catch((e) => console.error("[log] disconnect save error:", e));
 
           // If user disconnected, free the staff member
