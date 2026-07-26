@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { io, Socket } from "socket.io-client";
-import { Wifi, WifiOff, Monitor, Mic, ClipboardList, Users, ChevronDown, Mail, LogOut, MapPin, KeyRound, BookOpen, Map as MapIcon, MessageSquare } from "lucide-react";
+import { Wifi, WifiOff, Monitor, Mic, ClipboardList, Users, ChevronDown, Mail, LogOut, MapPin, KeyRound, BookOpen, Map as MapIcon, MessageSquare, Download } from "lucide-react";
 import { CallQueueItem } from "@/components/CallQueueItem";
 import { ActiveCallPanel } from "@/components/ActiveCallPanel";
 import { Toast } from "@/components/Toast";
@@ -868,6 +868,14 @@ export default function StaffPage() {
                           <ClipboardList size={15} className="text-gray-300" /> 通話ログ
                         </div>
                       )}
+                      <a
+                        href="/api/measure"
+                        onClick={() => setShowAccountMenu(false)}
+                        className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                        title="性能検証テスト用：通話ごとの遅延測定をCSVで保存します"
+                      >
+                        <Download size={15} className="text-gray-400" /> 測定CSVをダウンロード
+                      </a>
                       <button
                         onClick={() => { setShowSettings(true); setShowPwForm(false); setShowMicTest(false); setShowQuickReplies(false); setShowAccountMenu(false); }}
                         className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"

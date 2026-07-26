@@ -66,6 +66,26 @@ export async function listLogs(): Promise<SessionSummary[]> {
   );
 }
 
+/** 全通話ログ（本文込み・metrics含む）を取得。性能検証の測定CSV生成に使う。 */
+export async function getAllLogs(): Promise<SessionLog[]> {
+  const bucket = getGCSBucket();
+  if (!bucket) return [];
+  const [files] = await bucket.getFiles({ prefix: "logs/" });
+  const results = await Promise.all(
+    files
+      .filter((f) => f.name.endsWith(".json"))
+      .map(async (file) => {
+        try {
+          const [content] = await file.download();
+          return JSON.parse(content.toString()) as SessionLog;
+        } catch {
+          return null;
+        }
+      })
+  );
+  return results.filter((x): x is SessionLog => x !== null);
+}
+
 export async function getLog(sessionId: string): Promise<SessionLog | null> {
   const bucket = getGCSBucket();
   if (!bucket) return null;
