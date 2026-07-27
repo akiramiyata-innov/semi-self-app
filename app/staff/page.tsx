@@ -869,10 +869,10 @@ export default function StaffPage() {
                         </div>
                       )}
                       <a
-                        href="/api/measure"
+                        href="/api/measure?test=1"
                         onClick={() => setShowAccountMenu(false)}
                         className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-                        title="性能検証テスト用：通話ごとの遅延測定をCSVで保存します"
+                        title="性能検証テスト用：名前が test- で始まる通話（テスト分）だけの遅延測定をCSVで保存します"
                       >
                         <Download size={15} className="text-gray-400" /> 測定CSVをダウンロード
                       </a>

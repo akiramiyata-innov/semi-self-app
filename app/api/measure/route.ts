@@ -60,14 +60,21 @@ export async function GET(req: NextRequest) {
   if (!await getSessionFromRequest(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const logs = isGCSEnabled() ? await getAllLogs() : await loadLocalLogs();
+  let logs = isGCSEnabled() ? await getAllLogs() : await loadLocalLogs();
+  // ?test=1 のときは、機械名（name=）が "test-" で始まる通話＝性能検証テスト分だけに絞る。
+  // 一般のお客様の通話が混ざらないので、そのまま集計に使える（スタッフ画面のボタンはこれを使う）。
+  const testOnly = req.nextUrl.searchParams.get("test") === "1";
+  if (testOnly) {
+    logs = logs.filter((l) => (l.machineName ?? "").toLowerCase().startsWith("test-"));
+  }
   // BOM を付けると Excel が日本語を文字化けせず開ける。
   const body = "﻿" + toCsv(logs);
   const date = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const filename = testOnly ? `measure-test-${date}.csv` : `measure-${date}.csv`;
   return new NextResponse(body, {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="measure-${date}.csv"`,
+      "Content-Disposition": `attachment; filename="${filename}"`,
       "Cache-Control": "no-store",
     },
   });
