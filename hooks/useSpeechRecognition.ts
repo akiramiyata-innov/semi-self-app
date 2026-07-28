@@ -83,6 +83,9 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
   const sttGenRef = useRef(0);
   const sttListenerSocketRef = useRef<Socket | null>(null); // リスナー登録済みソケット
   const sttDrainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sttStartingRef = useRef(false); // getUserMedia 取得中か（完了前の多重取得を防ぐ）
+  const sttWantRef = useRef(false);     // マイクをONにしたい状態か（Space連打時、最後に押した状態を保持）
+  const startStreamingRef = useRef<() => void>(() => {}); // finally からの再開用（自己参照を避ける）
 
   // ── Web Speech API refs ────────────────────────────────────────────────────
   const recognitionRef = useRef<SpeechRecognition | null>(null);
@@ -184,9 +187,13 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
   const startStreaming = useCallback(async () => {
     const socket = getSocketRef.current?.();
     if (!socket) { setError("サーバーに接続できていません。少し待って再度お試しください。"); return; }
-    if (sttStreamRef.current) return; // 既に稼働中（二重開始防止）
+    // 稼働中、または取得処理が進行中なら何もしない。マイク取得(getUserMedia)は完了まで一瞬
+    // かかるため、この「取得中」も弾かないと、Space連打時に同じマイクを二重取得しようとして
+    // OSが一時的に掴めず（NotReadableError等）、実害のない偽エラーが表示されてしまう。
+    if (sttStreamRef.current || sttStartingRef.current) return;
     if (sttDrainTimerRef.current) { clearTimeout(sttDrainTimerRef.current); sttDrainTimerRef.current = null; }
     const gen = ++sttGenRef.current;
+    sttStartingRef.current = true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (sttGenRef.current !== gen) { stream.getTracks().forEach((t) => t.stop()); return; } // 開始中に停止された
@@ -212,6 +219,10 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
       activeRef.current = true;
       setListening(true);
     } catch (e) {
+      // この試行が停止/再開で無効化されていれば（Space連打で開く⇄閉じるが重なった等）、
+      // 偽のエラーは出さず黙って回復させる。本物の失敗だけをエラー表示する。
+      if (sttGenRef.current !== gen) return;
+      sttWantRef.current = false; // 本物の失敗 → 再開ループを止める（利用者が再度ONにするまで待つ）
       const err = e as DOMException;
       setError(
         err.name === "NotAllowedError"
@@ -219,8 +230,18 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
           : "マイクへのアクセスに失敗しました。"
       );
       stopStreaming();
+    } finally {
+      sttStartingRef.current = false;
+      // 取得中に状態が変わっていたら（連打で最後に「入」だがまだ掴めていない 等）、最後に押した
+      // 状態へ合わせ直す。start/stopStreaming は多重防止済みなので再入しても安全。
+      if (sttWantRef.current) {
+        if (!sttStreamRef.current) startStreamingRef.current();
+      } else if (sttStreamRef.current) {
+        stopStreaming();
+      }
     }
   }, [stopStreaming, ensureSttListeners]);
+  useEffect(() => { startStreamingRef.current = () => { void startStreaming(); }; }, [startStreaming]);
 
   // ── Web Speech API: core recognition instance ──────────────────────────────
   const startInternal = useCallback(() => {
@@ -299,6 +320,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
     setError(null);
 
     if (streamingEnabled) {
+      sttWantRef.current = true; // マイクON希望を記録（連打時、取得中に状態が変わっても最終状態へ合わせる）
       await startStreaming();
     } else if (useWebSpeech) {
       // Chrome path: warm up getUserMedia then launch Web Speech API
@@ -342,6 +364,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
   const stop = useCallback(() => {
     activeRef.current = false;
     if (streamingEnabled) {
+      sttWantRef.current = false; // マイクOFF希望を記録
       stopStreaming();
     } else if (useWebSpeech) {
       const rec = recognitionRef.current;

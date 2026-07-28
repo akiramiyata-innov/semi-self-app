@@ -5,6 +5,7 @@ import { getGlossaryTermsFresh } from "../lib/glossaryClient";
 import type { GlossaryTerm } from "../lib/types";
 import { buildReadingMap, applyReadingMatch, warmUpTokenizer, type ReadingEntry } from "../lib/reading";
 import { noteSttAudio, noteSttFinal } from "./metrics";
+import { SilenceGate, chunkRms } from "./silenceGate";
 
 // Google streaming recognition has a per-stream time limit. Reopen the stream
 // before then so long (2 min+) speech continues seamlessly.
@@ -103,6 +104,8 @@ export function registerSttHandlers(socket: Socket): void {
   let readingMap: ReadingEntry[] = [];
   let running = false;
   let consecutiveErrors = 0;
+  // 無音ゲート：発話音量が観測されていない区間の認識結果（モデルの幻聴）を破棄する
+  const gate = new SilenceGate();
 
   /** 認識結果のカナ読みを、登録された漢字に置き換える（chirp_2 が漢字化しきれない語の後処理）。 */
   function applyCorrections(text: string): string {
@@ -149,16 +152,25 @@ export function registerSttHandlers(socket: Socket): void {
       if (!raw) return;
       const base = applyCorrections(raw);
       if (r.isFinal) {
+        // 無音ゲート：発話音量が観測されていない区間の確定結果は、モデルの幻聴
+        // （無音・微小雑音からの創作。数の読み上げ・あいづち・挨拶など）とみなし破棄する。
+        const verdict = gate.onFinal();
+        if (!verdict.accept) {
+          console.log(`[stt-gate] 無音区間のため破棄 speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)} raw=${JSON.stringify(raw)}`);
+          return;
+        }
         // 確定時のみ、読み照合（kuromoji）で同音の別漢字も矯正する。
         const transcript = await applyReadingMatch(base, readingMap);
-        // ── 診断ログ（用語集語の誤挿入調査）───────────────────────────
+        // ── 診断ログ（用語集語の誤挿入調査＋無音ゲートしきい値調整）─────────
         // 生の認識結果(raw)→かな漢字補正(corrected)→読み照合(final)を段階で記録。
         // 話していない登録語が混入した場合、それが raw の時点で入っているか（＝モデル側か
         // 後処理側か）を切り分けるためのログ。動作は変えず記録するだけ（調査後に削除可）。
-        console.log(`[stt-diag] raw=${JSON.stringify(raw)} corrected=${JSON.stringify(base)} final=${JSON.stringify(transcript)}`);
+        console.log(`[stt-diag] speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)} raw=${JSON.stringify(raw)} corrected=${JSON.stringify(base)} final=${JSON.stringify(transcript)}`);
         socket.emit("stt:final", { transcript });
         noteSttFinal(socket.id); // 性能測定：発話終了→確定テキスト
       } else {
+        // interim（入力中プレビュー）も同じ基準で抑止し、幻聴の「打ちかけ表示」を防ぐ
+        if (!gate.hasSpeech()) return;
         socket.emit("stt:interim", { transcript: base });
       }
     });
@@ -208,6 +220,7 @@ export function registerSttHandlers(socket: Socket): void {
     warmUpTokenizer(); // 辞書ロードを先行させ、初回の確定までに準備を整える
     running = true;
     consecutiveErrors = 0;
+    gate.reset(); // マイクON時に音量計測をやり直す
     await openStream();
     scheduleRestart();
   });
@@ -215,9 +228,12 @@ export function registerSttHandlers(socket: Socket): void {
   socket.on("stt:audio", (chunk: ArrayBuffer | Buffer) => {
     if (!stream) return;
     noteSttAudio(socket.id); // 性能測定：最後に音声が届いた時刻＝発話終了の目安
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    // 音声の転送を最優先（音量測定に万一問題があっても認識用の音声は絶対に欠けさせない）
     try {
-      stream.write({ audio: Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk) });
+      stream.write({ audio: buf });
     } catch { /* stream closing */ }
+    gate.onChunk(chunkRms(buf)); // 無音ゲート：チャンクごとの音量を記録
   });
 
   socket.on("stt:stop", stopStream);
