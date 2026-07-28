@@ -89,7 +89,6 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   const [latestAudio, setLatestAudio] = useState<string | undefined>(undefined);
 
   const [staffScreenFrame, setStaffScreenFrame] = useState<string | null>(null);
-  const [inputText, setInputText] = useState("");
   const [showConnectWarning, setShowConnectWarning] = useState(false);
   const [deliveredIds, setDeliveredIds] = useState<string[]>([]); // 係員に届いた発言のid
   const [staffComposing, setStaffComposing] = useState(false);    // 係員が回答を準備中
@@ -471,21 +470,6 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   const endCall = () => {
     socketRef.current?.emit("call:end", { sessionId });
   };
-
-  const sendTextMessage = useCallback(() => {
-    const text = inputText.trim();
-    if (!text) return;
-    setInputText("");
-    setInterimUser("");
-    const clientId = addEntry({ speaker: "user", text, isFinal: true });
-    socketRef.current?.emit("speech:user", {
-      sessionId: sessionIdRef.current,
-      text,
-      lang: userLangRef.current,
-      isFinal: true,
-      clientId,
-    });
-  }, [inputText, addEntry]);
 
   const errMsg = ERR[userLang] ?? ERR.ja;
   const statusText = STATUS_TEXT[userLang] ?? STATUS_TEXT.ja;

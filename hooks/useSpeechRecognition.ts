@@ -93,8 +93,6 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
 
   // ── Google STT refs ────────────────────────────────────────────────────────
   const gstStreamRef = useRef<MediaStream | null>(null);
-  const gstAudioContextRef = useRef<AudioContext | null>(null);
-  const gstAnimFrameRef = useRef<number>(0);
   const gstCurrentRecorderRef = useRef<MediaRecorder | null>(null);
 
   // ── Google STT: transcribe one audio blob ──────────────────────────────────

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Trash2, UserPlus, Upload, ChevronDown, ChevronUp, KeyRound, ShieldCheck, Building2 } from "lucide-react";
+import { Trash2, UserPlus, Upload, KeyRound, ShieldCheck, Building2 } from "lucide-react";
 import * as XLSX from "xlsx";
 import type { Station } from "@/lib/types";
 
