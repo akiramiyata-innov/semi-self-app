@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Monitor, MonitorOff, Mic, MicOff, PhoneOff, Send } from "lucide-react";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { ScreenShareView } from "./ScreenShareView";
@@ -24,6 +24,8 @@ interface ActiveCallPanelProps {
   onEnd: () => void;
   /** Called when staff submits text manually (fallback for mic) */
   onSendText?: (text: string) => void;
+  /** 入力欄に文字があるか（お客様側の「回答を準備しています」表示に使う）。 */
+  onTypingChange?: (typing: boolean) => void;
   /** Staff's saved quick-reply phrases, shown as one-tap send buttons. */
   quickReplies?: string[];
 }
@@ -42,11 +44,20 @@ export function ActiveCallPanel({
   onToggleScreenShare,
   onEnd,
   onSendText,
+  onTypingChange,
   quickReplies,
 }: ActiveCallPanelProps) {
   const [inputText, setInputText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const lang = SUPPORTED_LANGS.find((l) => l.code === userLang);
+
+  const onTypingChangeRef = useRef(onTypingChange);
+  useEffect(() => { onTypingChangeRef.current = onTypingChange; }, [onTypingChange]);
+  // 入力欄に文字があるかを親へ通知。通話パネルが閉じたら必ず解除する（表示が残らないように）。
+  useEffect(() => {
+    onTypingChangeRef.current?.(inputText.trim().length > 0);
+  }, [inputText]);
+  useEffect(() => () => { onTypingChangeRef.current?.(false); }, []);
 
   const handleSend = () => {
     const text = inputText.trim();

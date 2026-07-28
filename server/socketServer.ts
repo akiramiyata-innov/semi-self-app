@@ -579,8 +579,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     // ── Speech: user → staff ──────────────────────────────────────────────────
     socket.on(
       "speech:user",
-      async (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean }) => {
-        const { sessionId, text, lang, isFinal } = payload;
+      async (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean; clientId?: string }) => {
+        const { sessionId, text, lang, isFinal, clientId } = payload;
         const session = activeSessions.get(sessionId);
         if (!session) return;
         // Only the kiosk user of this session may speak as the user — blocks a
@@ -611,8 +611,24 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         }
 
         io.to(session.staffSocketId).emit("speech:user", { sessionId, text, lang, isFinal, translatedText });
+
+        // お客様側に「係員の画面に届いた」ことを返す（キオスクで既読チェックを表示する）。
+        // 待っている間の不安（伝わったのか分からない）を解消するための通知。
+        if (isFinal && clientId) {
+          io.to(session.userSocketId).emit("speech:delivered", { sessionId, clientId });
+        }
       }
     );
+
+    // ── 係員が回答を準備中（マイクON／入力中）→ お客様に知らせる ────────────────
+    socket.on("staff:composing", (payload: { sessionId: string; active: boolean }) => {
+      const { sessionId, active } = payload;
+      const session = activeSessions.get(sessionId);
+      if (!session) return;
+      // この通話の担当係員のみ送信可（なりすまし防止・v1.16.0の方針に合わせる）
+      if (session.staffSocketId !== socket.id) return;
+      io.to(session.userSocketId).emit("staff:composing", { sessionId, active: !!active });
+    });
 
     // ── Speech: staff → user ──────────────────────────────────────────────────
     socket.on(

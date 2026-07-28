@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
-import { PhoneCall, PhoneOff, Mic, X } from "lucide-react";
+import { PhoneCall, PhoneOff, Mic, X, Check } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { KioskHeader } from "@/components/KioskHeader";
 import { ScreenShareView } from "@/components/ScreenShareView";
@@ -26,6 +26,21 @@ const ERR: Record<string, { noStaff: string; noStaffSub: string; disconnected: s
   es: { noStaff: "Sin personal disponible", noStaffSub: "Por favor, inténtelo más tarde.", disconnected: "Conexión perdida", disconnectedSub: "Verifique su red e inténtelo de nuevo.", staffDisconnected: "Se perdió la conexión con el agente", staffDisconnectedSub: "Por favor, vuelva a llamar.", serverDown: "No se puede conectar al servidor." },
   th: { noStaff: "ไม่มีเจ้าหน้าที่", noStaffSub: "กรุณาลองใหม่ภายหลัง", disconnected: "การเชื่อมต่อขาดหาย", disconnectedSub: "กรุณาตรวจสอบเครือข่ายและลองใหม่", staffDisconnected: "การเชื่อมต่อกับเจ้าหน้าที่ขาดหาย", staffDisconnectedSub: "กรุณาโทรหาอีกครั้ง", serverDown: "ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้" },
 };
+
+// お客様の不安（伝わったのか／対応中なのか分からない）を解消する2つの表示の文言。
+const STATUS_TEXT: Record<string, { delivered: string; composing: string }> = {
+  ja: { delivered: "係員に伝わりました", composing: "係員が回答を準備しています" },
+  en: { delivered: "Delivered to staff", composing: "Staff is preparing a reply" },
+  zh: { delivered: "已送达工作人员", composing: "工作人员正在准备回复" },
+  "zh-TW": { delivered: "已送達服務人員", composing: "服務人員正在準備回覆" },
+  ko: { delivered: "담당자에게 전달되었습니다", composing: "담당자가 답변을 준비하고 있습니다" },
+  fr: { delivered: "Transmis à l'agent", composing: "L'agent prépare une réponse" },
+  es: { delivered: "Enviado al personal", composing: "El personal está preparando una respuesta" },
+  th: { delivered: "ส่งถึงเจ้าหน้าที่แล้ว", composing: "เจ้าหน้าที่กำลังเตรียมคำตอบ" },
+};
+
+/** 係員から解除通知が届かない場合でも「準備しています」が残り続けないようにする保険。 */
+const COMPOSING_MAX_MS = 60_000;
 
 let entryCounter = 0;
 function makeId() { return `e-${Date.now()}-${entryCounter++}`; }
@@ -76,6 +91,8 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   const [staffScreenFrame, setStaffScreenFrame] = useState<string | null>(null);
   const [inputText, setInputText] = useState("");
   const [showConnectWarning, setShowConnectWarning] = useState(false);
+  const [deliveredIds, setDeliveredIds] = useState<string[]>([]); // 係員に届いた発言のid
+  const [staffComposing, setStaffComposing] = useState(false);    // 係員が回答を準備中
   const connectWarningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const sessionIdRef = useRef<string | null>(null);
@@ -83,8 +100,11 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   const micOnRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  /** 発言を1件追加し、そのidを返す（お客様の発言は「係員に伝わりました」の照合に使う）。 */
   const addEntry = useCallback((entry: Omit<TranscriptEntry, "id" | "timestamp">) => {
-    setTranscript((prev) => [...prev, { ...entry, id: makeId(), timestamp: Date.now() }]);
+    const id = makeId();
+    setTranscript((prev) => [...prev, { ...entry, id, timestamp: Date.now() }]);
+    return id;
   }, []);
 
   const langConfig = SUPPORTED_LANGS.find((l) => l.code === userLang);
@@ -101,12 +121,13 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         return;
       }
       setInterimUser("");
-      addEntry({ speaker: "user", text, isFinal: true });
+      const clientId = addEntry({ speaker: "user", text, isFinal: true });
       socketRef.current?.emit("speech:user", {
         sessionId: sessionIdRef.current,
         text,
         lang: userLangRef.current,
         isFinal: true,
+        clientId, // 係員に届いたら speech:delivered でこのidが返る
       });
       // Legacy paths give one final per mic session → auto-OFF after sending.
       // Streaming gives a final per pause, so keep the mic ON for continuous speech.
@@ -310,6 +331,8 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     sessionIdRef.current = null;
     setStaffScreenFrame(null);
     setLatestAudio(undefined);
+    setDeliveredIds([]);
+    setStaffComposing(false);
   }, [stopMic]);
 
   // Socket.IO setup
@@ -379,7 +402,18 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       }, 3000);
     });
 
+    // お客様の発言が係員の画面に届いた（既読チェックを表示する）
+    s.on("speech:delivered", (payload: { clientId: string }) => {
+      if (payload.clientId) setDeliveredIds((prev) => [...prev, payload.clientId]);
+    });
+
+    // 係員がマイクON／入力中＝回答を準備している
+    s.on("staff:composing", (payload: { active: boolean }) => {
+      setStaffComposing(!!payload.active);
+    });
+
     s.on("speech:staff", (payload: { text: string; isFinal: boolean }) => {
+      setStaffComposing(false); // 返事が来た（途中表示でも）＝準備中の表示は不要
       if (payload.isFinal) {
         setInterimStaff("");
         addEntry({ speaker: "staff", text: payload.text, isFinal: true });
@@ -412,7 +446,14 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [transcript, interimStaff]);
+  }, [transcript, interimStaff, staffComposing]);
+
+  // 解除通知が届かなかった場合の保険（係員が入力途中で離席した等）。
+  useEffect(() => {
+    if (!staffComposing) return;
+    const t = setTimeout(() => setStaffComposing(false), COMPOSING_MAX_MS);
+    return () => clearTimeout(t);
+  }, [staffComposing]);
 
   const selectLang = (code: LangCode) => {
     unlockAudioContext(); // running inside a tap → unlock audio for the staff's TTS
@@ -436,16 +477,18 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     if (!text) return;
     setInputText("");
     setInterimUser("");
-    addEntry({ speaker: "user", text, isFinal: true });
+    const clientId = addEntry({ speaker: "user", text, isFinal: true });
     socketRef.current?.emit("speech:user", {
       sessionId: sessionIdRef.current,
       text,
       lang: userLangRef.current,
       isFinal: true,
+      clientId,
     });
   }, [inputText, addEntry]);
 
   const errMsg = ERR[userLang] ?? ERR.ja;
+  const statusText = STATUS_TEXT[userLang] ?? STATUS_TEXT.ja;
 
   // --- No Staff ---
   if (phase === "no-staff") {
@@ -610,21 +653,41 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         {/* Chat bubbles */}
         <div className="flex-1 overflow-y-auto flex flex-col gap-4 pr-1">
           {transcript.map((entry) => (
-            <div
-              key={entry.id}
-              className={`rounded-3xl px-7 py-4 text-2xl font-medium leading-snug max-w-[90%] shadow-sm ${
-                entry.speaker === "user"
-                  ? "bg-amber-300 text-gray-900"
-                  : "bg-sky-200 text-gray-900"
-              }`}
-            >
-              {entry.text}
+            <div key={entry.id} className="max-w-[90%]">
+              <div
+                className={`rounded-3xl px-7 py-4 text-2xl font-medium leading-snug shadow-sm ${
+                  entry.speaker === "user"
+                    ? "bg-amber-300 text-gray-900"
+                    : "bg-sky-200 text-gray-900"
+                }`}
+              >
+                {entry.text}
+              </div>
+              {/* 係員の画面に届いた合図。待っている間の「伝わったのか」という不安に応える。 */}
+              {entry.speaker === "user" && deliveredIds.includes(entry.id) && (
+                <p className="mt-1.5 ml-2 flex items-center gap-1.5 text-lg text-gray-500">
+                  <Check size={20} strokeWidth={3} className="text-emerald-600" />
+                  {statusText.delivered}
+                </p>
+              )}
             </div>
           ))}
 
           {interimStaff && (
             <div className="rounded-3xl px-7 py-4 text-2xl text-gray-400 italic max-w-[90%] bg-sky-100 shadow-sm">
               {interimStaff}
+            </div>
+          )}
+
+          {/* 係員がマイクON／入力中＝いま対応している、を伝える。 */}
+          {staffComposing && !interimStaff && (
+            <div className="flex items-center gap-3 rounded-3xl px-7 py-4 max-w-[90%] bg-sky-100 shadow-sm">
+              <span className="flex gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-sky-500 animate-bounce [animation-delay:-0.3s]" />
+                <span className="w-2.5 h-2.5 rounded-full bg-sky-500 animate-bounce [animation-delay:-0.15s]" />
+                <span className="w-2.5 h-2.5 rounded-full bg-sky-500 animate-bounce" />
+              </span>
+              <span className="text-2xl text-gray-600">{statusText.composing}</span>
             </div>
           )}
 

@@ -592,6 +592,29 @@ export default function StaffPage() {
     }
   }, [stopMic, startMic]);
 
+  // ── 「係員が回答を準備しています」通知 ────────────────────────────────────────
+  // お客様は話し終えた後、係員が回答を用意している間ずっと無反応の画面を見ることになり
+  // 「伝わったのか」不安になる。マイクON中／入力中であることをキオスクに知らせる。
+  const composingSidRef = useRef<string | null>(null); // 現在「準備中」を通知している通話
+  const typingSidRef = useRef<string | null>(null);    // 入力欄に文字がある通話
+  const setComposing = useCallback((sessionId: string | null) => {
+    const prev = composingSidRef.current;
+    if (prev === sessionId) return; // 同じ状態の連投を避ける
+    if (prev) socketRef.current?.emit("staff:composing", { sessionId: prev, active: false });
+    if (sessionId) socketRef.current?.emit("staff:composing", { sessionId, active: true });
+    composingSidRef.current = sessionId;
+  }, []);
+  // マイクON/OFF（ボタン・Space・自動OFFのいずれの経路でも）を通知に反映する
+  useEffect(() => {
+    if (listening && activeListeningId) setComposing(activeListeningId);
+    else if (composingSidRef.current && !typingSidRef.current) setComposing(null);
+  }, [listening, activeListeningId, setComposing]);
+  const handleTypingChange = useCallback((sessionId: string, typing: boolean) => {
+    typingSidRef.current = typing ? sessionId : null;
+    if (typing) setComposing(sessionId);
+    else if (!micOnRef.current) setComposing(null);
+  }, [setComposing]);
+
   // Space key shortcut: toggle mic (not when typing in input)
   // Uses refs so the handler is always registered once and reads latest values.
   const activeSessionsRef = useRef(activeSessions);
@@ -1153,6 +1176,7 @@ export default function StaffPage() {
                   onToggleMic={() => toggleMic(session.sessionId)}
                   onToggleScreenShare={() => toggleScreenShare(session.sessionId)}
                   onEnd={() => endSession(session.sessionId)}
+                  onTypingChange={(typing) => handleTypingChange(session.sessionId, typing)}
                   onSendText={(text) => {
                     // Text input fallback: send as speech:staff final
                     setActiveSessions((prev) => {
