@@ -151,6 +151,11 @@ export function registerSttHandlers(socket: Socket): void {
       if (r.isFinal) {
         // 確定時のみ、読み照合（kuromoji）で同音の別漢字も矯正する。
         const transcript = await applyReadingMatch(base, readingMap);
+        // ── 診断ログ（用語集語の誤挿入調査）───────────────────────────
+        // 生の認識結果(raw)→かな漢字補正(corrected)→読み照合(final)を段階で記録。
+        // 話していない登録語が混入した場合、それが raw の時点で入っているか（＝モデル側か
+        // 後処理側か）を切り分けるためのログ。動作は変えず記録するだけ（調査後に削除可）。
+        console.log(`[stt-diag] raw=${JSON.stringify(raw)} corrected=${JSON.stringify(base)} final=${JSON.stringify(transcript)}`);
         socket.emit("stt:final", { transcript });
         noteSttFinal(socket.id); // 性能測定：発話終了→確定テキスト
       } else {
