@@ -41,6 +41,8 @@ const STATUS_TEXT: Record<string, { delivered: string; composing: string }> = {
 
 /** 係員から解除通知が届かない場合でも「準備しています」が残り続けないようにする保険。 */
 const COMPOSING_MAX_MS = 60_000;
+/** アバターが話し終えてから発話検知を再開するまでの余韻（スピーカーの残響・反響対策）。 */
+const AVATAR_TAIL_MS = 500;
 
 let entryCounter = 0;
 function makeId() { return `e-${Date.now()}-${entryCounter++}`; }
@@ -471,6 +473,19 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     socketRef.current?.emit("call:end", { sessionId });
   };
 
+  // アバターの発話中はサーバーに知らせ、係員画面の「お客様発話中」の誤点灯を防ぐ
+  // （キオスクのマイクはアバター自身の声も拾うため）。終了時は残響を拾わないよう
+  // 少し余韻を置いてから解除する。
+  const avatarTailRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notifyAvatarSpeaking = useCallback((speaking: boolean) => {
+    if (avatarTailRef.current) { clearTimeout(avatarTailRef.current); avatarTailRef.current = null; }
+    const send = (v: boolean) =>
+      socketRef.current?.emit("user:avatarSpeaking", { sessionId: sessionIdRef.current, speaking: v });
+    if (speaking) { send(true); return; }
+    avatarTailRef.current = setTimeout(() => { avatarTailRef.current = null; send(false); }, AVATAR_TAIL_MS);
+  }, []);
+  useEffect(() => () => { if (avatarTailRef.current) clearTimeout(avatarTailRef.current); }, []);
+
   const errMsg = ERR[userLang] ?? ERR.ja;
   const statusText = STATUS_TEXT[userLang] ?? STATUS_TEXT.ja;
 
@@ -738,6 +753,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         <div className="flex-1 min-h-0 flex items-end justify-center pb-2">
           <Avatar
             audioBase64={latestAudio}
+            onSpeakingChange={notifyAvatarSpeaking}
             visible
             size="xl"
           />

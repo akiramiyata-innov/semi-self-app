@@ -32,6 +32,8 @@ interface ActiveSession {
   userCameraFaceFrame: string | null;
   isListening: boolean;
   isCapturing: boolean;
+  /** お客様が今話しているか（音量で判定。確定テキストが出るまで点灯し続ける）。 */
+  userSpeaking: boolean;
 }
 
 // Kiosk machines available for demo
@@ -309,7 +311,12 @@ export default function StaffPage() {
     getSocket: () => socketRef.current,
     // Edge/streaming: 無音でOFFしたとき onFinal は発火しない → onStop で必ずセッションをクリア
     // （streaming では停止の数秒後に呼ばれる。その間に次のマイクONが始まっていたら消さない）
-    onStop: () => { if (!micOnRef.current) activeListeningSession.current = null; },
+    onStop: () => {
+      if (!micOnRef.current) activeListeningSession.current = null;
+      // 確定テキスト待ちが明けた。何も話していなければ、ここで「準備しています」を解除する
+      // （話していた場合は返答が届いた時点でキオスク側が消す）。
+      if (!micOnRef.current && !typingSidRef.current) setComposingRef.current(null);
+    },
     onInterim: (text) => {
       const sid = activeListeningSession.current;
       if (!sid) return;
@@ -338,6 +345,9 @@ export default function StaffPage() {
       });
 
       socketRef.current?.emit("speech:staff", { sessionId: sid, text, isFinal: true });
+      // ここから先の「準備しています」はサーバーが引き継ぐ（返答が届いた時点でキオスクが消す）。
+      // 手元の記録だけ白紙に戻し、次の発話でまた案内を出せるようにする（通知は送らない）。
+      composingSidRef.current = null;
 
       // 非ストリーミング（Chrome/Edge）は従来通りターン制: 送信後マイクOFF、再度押して話す。
       // ストリーミング時はマイクを止めず連続入力にする（キオスク側と同じ扱い）。
@@ -481,6 +491,11 @@ export default function StaffPage() {
       }
     });
 
+    // お客様が話しているか（音量で判定。マイクのON/OFF状態には依存しない）
+    s.on("user:speaking", (payload: { sessionId: string; speaking: boolean }) => {
+      updateSession(payload.sessionId, { userSpeaking: !!payload.speaking });
+    });
+
     s.on(
       "speech:user",
       (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean; translatedText?: string }) => {
@@ -542,6 +557,7 @@ export default function StaffPage() {
       userCameraFaceFrame: previewFaceFrames.get(call.sessionId) ?? null,
       isListening: false,
       isCapturing: false,
+      userSpeaking: false,
     }]]));
   }, [previewFaceFrames]);
 
@@ -604,15 +620,22 @@ export default function StaffPage() {
     if (sessionId) socketRef.current?.emit("staff:composing", { sessionId, active: true });
     composingSidRef.current = sessionId;
   }, []);
-  // マイクON/OFF（ボタン・Space・自動OFFのいずれの経路でも）を通知に反映する
+  // マイクONで通知する。OFFでは解除しない：切った後も確定テキスト待ち→翻訳→音声合成が
+  // 続き、その間にお客様の画面が無反応になるため。解除はフックの onStop（確定待ちが明けた
+  // とき）と、返答がお客様に届いた時点（キオスク側で判定）に任せる。
   useEffect(() => {
     if (listening && activeListeningId) setComposing(activeListeningId);
-    else if (composingSidRef.current && !typingSidRef.current) setComposing(null);
   }, [listening, activeListeningId, setComposing]);
+  const setComposingRef = useRef(setComposing);
+  useEffect(() => { setComposingRef.current = setComposing; }, [setComposing]);
+  const justSentRef = useRef(false); // 直前の入力欄クリアが「送信」によるものか
   const handleTypingChange = useCallback((sessionId: string, typing: boolean) => {
     typingSidRef.current = typing ? sessionId : null;
-    if (typing) setComposing(sessionId);
-    else if (!micOnRef.current) setComposing(null);
+    if (typing) { setComposing(sessionId); return; }
+    // 送信でクリアされた場合は解除しない。ここで消すと、返答が届くまでの約1秒間、
+    // お客様の画面が無反応になる（解除は返答が届いた時点でキオスク側が行う）。
+    if (justSentRef.current) { justSentRef.current = false; return; }
+    if (!micOnRef.current) setComposing(null);
   }, [setComposing]);
 
   // Space key shortcut: toggle mic (not when typing in input)
@@ -1177,7 +1200,9 @@ export default function StaffPage() {
                   onToggleScreenShare={() => toggleScreenShare(session.sessionId)}
                   onEnd={() => endSession(session.sessionId)}
                   onTypingChange={(typing) => handleTypingChange(session.sessionId, typing)}
+                  userSpeaking={session.userSpeaking}
                   onSendText={(text) => {
+                    justSentRef.current = true; // 直後の入力欄クリアで案内を消さないため
                     // Text input fallback: send as speech:staff final
                     setActiveSessions((prev) => {
                       const next = new Map(prev);
@@ -1195,6 +1220,7 @@ export default function StaffPage() {
                       return next;
                     });
                     socketRef.current?.emit("speech:staff", { sessionId: session.sessionId, text, isFinal: true });
+                    composingSidRef.current = null; // 以降はサーバーが案内を引き継ぐ
                     // Auto-OFF mic after sending — staff must press mic button again to speak
                     stopMic();
                     activeListeningSession.current = null;

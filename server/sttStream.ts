@@ -5,7 +5,7 @@ import { getGlossaryTermsFresh } from "../lib/glossaryClient";
 import type { GlossaryTerm } from "../lib/types";
 import { buildReadingMap, applyReadingMatch, warmUpTokenizer, type ReadingEntry } from "../lib/reading";
 import { noteSttAudio, noteSttFinal } from "./metrics";
-import { SilenceGate, chunkRms } from "./silenceGate";
+import { SilenceGate, chunkRms, SPEECH_RMS, MIN_SPEECH_CHUNKS } from "./silenceGate";
 
 // Google streaming recognition has a per-stream time limit. Reopen the stream
 // before then so long (2 min+) speech continues seamlessly.
@@ -95,7 +95,7 @@ function buildCorrections(terms: GlossaryTerm[]): Correction[] {
  * adaptation so domain words (station names, jargon) are recognized correctly —
  * this is what the classic V1 phrase hints failed to do.
  */
-export function registerSttHandlers(socket: Socket): void {
+export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void): void {
   let stream: SpeechStream | null = null;
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
   let lang = "ja-JP";
@@ -106,6 +106,8 @@ export function registerSttHandlers(socket: Socket): void {
   let consecutiveErrors = 0;
   // 無音ゲート：発話音量が観測されていない区間の認識結果（モデルの幻聴）を破棄する
   const gate = new SilenceGate();
+  // 「お客様発話中」表示用：発話音量が連続したチャンク数（0.2秒＝2チャンク続いたら通知）
+  let voiceRun = 0;
 
   /** 認識結果のカナ読みを、登録された漢字に置き換える（chirp_2 が漢字化しきれない語の後処理）。 */
   function applyCorrections(text: string): string {
@@ -233,7 +235,16 @@ export function registerSttHandlers(socket: Socket): void {
     try {
       stream.write({ audio: buf });
     } catch { /* stream closing */ }
-    gate.onChunk(chunkRms(buf)); // 無音ゲート：チャンクごとの音量を記録
+    const rms = chunkRms(buf);
+    gate.onChunk(rms); // 無音ゲート：チャンクごとの音量を記録
+    // 「お客様発話中」：発話とみなせる音量が続いている間、係員画面へ知らせる。
+    // 消すのは確定テキストが出たとき（socketServer側で判断）なので、ここでは点灯のみ通知する。
+    if (rms >= SPEECH_RMS) {
+      voiceRun++;
+      if (voiceRun >= MIN_SPEECH_CHUNKS) onVoiceActivity?.();
+    } else {
+      voiceRun = 0;
+    }
   });
 
   socket.on("stt:stop", stopStream);

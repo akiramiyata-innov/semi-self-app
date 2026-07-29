@@ -81,7 +81,16 @@ interface ActiveSession extends CallRecord {
   staffSocketId: string;
   startedAt: number;
   transcript: TranscriptEntry[];
+  /** 係員画面の「お客様発話中」を表示中か。 */
+  userSpeaking?: boolean;
+  /** 確定テキストが来ないまま表示が残らないようにする保険タイマー。 */
+  speakingTimer?: ReturnType<typeof setTimeout>;
+  /** アバターが発話中か（キオスクのマイクが自分の声を拾うため、その間は発話中表示を止める）。 */
+  avatarSpeaking?: boolean;
 }
+
+/** 「お客様発話中」が確定テキストなしで残り続けないようにする上限。 */
+const USER_SPEAKING_MAX_MS = 8_000;
 
 const callQueue = new Map<string, CallRecord>();
 const activeSessions = new Map<string, ActiveSession>();
@@ -160,6 +169,52 @@ function releaseSession(sessionId: string, staffSocketId: string): void {
     staff.activeSessionIds.delete(sessionId);
     if (staff.activeSessionIds.size === 0 && staff.status === "busy") {
       staff.status = "available";
+    }
+  }
+}
+
+// ── 係員画面の「お客様発話中」 ────────────────────────────────────────────────
+// 待っている側に相手の様子を伝えるための表示。点灯は音量（実際に声が出ているか）で
+// 判断し、消すのは確定テキストが出たとき。マイクのON/OFF状態には依存しない。
+
+/** 表示状態を変えて係員に伝える（変化があったときだけ送る）。 */
+function setUserSpeaking(sessionId: string, session: ActiveSession, speaking: boolean): void {
+  if (session.speakingTimer) { clearTimeout(session.speakingTimer); session.speakingTimer = undefined; }
+  if (session.userSpeaking === speaking) return;
+  session.userSpeaking = speaking;
+  io.to(session.staffSocketId).emit("user:speaking", { sessionId, speaking });
+}
+
+/** 通話終了時にタイマーを止める（残ったタイマーが後から発火しないように）。 */
+function clearSpeakingState(session: ActiveSession | undefined): void {
+  if (session?.speakingTimer) { clearTimeout(session.speakingTimer); session.speakingTimer = undefined; }
+}
+
+/**
+ * 声を検知したとき（sttStream から音量判定を受けて呼ばれる）。送り主がお客様か係員かで
+ * 相手側の案内に振り分ける。
+ */
+function noteVoiceActivity(socketId: string): void {
+  for (const [sessionId, session] of activeSessions) {
+    if (session.userSocketId === socketId) {
+      // お客様が話している → 係員画面に「お客様発話中」
+      // アバターが話している間は、その声をマイクが拾って誤点灯するため表示しない。
+      // （音声認識そのものは止めない：ここで止めるのは表示の判定だけ）
+      if (session.avatarSpeaking) return;
+      setUserSpeaking(sessionId, session, true);
+      // 確定テキストが来ないまま（騒音の誤検知など）残り続けないようにする保険
+      session.speakingTimer = setTimeout(() => {
+        session.speakingTimer = undefined;
+        setUserSpeaking(sessionId, session, false);
+      }, USER_SPEAKING_MAX_MS);
+      return;
+    }
+    if (session.staffSocketId === socketId) {
+      // 係員が話している → お客様画面に「係員が回答を準備しています」を出し直す。
+      // マイクを入れっぱなしで会話が続く場合、マイクONの合図は最初の一度しか出ないため、
+      // 2回目以降の返答でも案内が出るようにここで補う。
+      io.to(session.userSocketId).emit("staff:composing", { sessionId, active: true });
+      return;
     }
   }
 }
@@ -382,7 +437,9 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
   io.on("connection", (socket: Socket) => {
 
     // ── Streaming STT (real-time, glossary-aware, long-form) ──────────────────
-    registerSttHandlers(socket);
+    // 音量から「お客様が話している」ことを検知したら係員画面に知らせる。マイクのON/OFF
+    // ではなく実際の声で判定するので、将来キオスクのマイクを常時ONにしても そのまま動く。
+    registerSttHandlers(socket, () => noteVoiceActivity(socket.id));
 
     // ── Staff joins ───────────────────────────────────────────────────────────
     socket.on("staff:join", async (payload?: { name?: string; uid?: string; stationIds?: string[] }) => {
@@ -568,6 +625,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         await saveSessionLog(session);
         releaseSession(sessionId, session.staffSocketId);
       }
+      clearSpeakingState(session);
       activeSessions.delete(sessionId);
       callQueue.delete(sessionId);
       io.to(`session:${sessionId}`).emit("call:ended", { sessionId });
@@ -600,6 +658,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         }
 
         if (isFinal) {
+          // 確定テキストが係員画面に出る＝「お客様発話中」の役目は終わり
+          setUserSpeaking(sessionId, session, false);
           session.transcript.push({
             id: `u-${Date.now()}-${entryCounter++}`,
             speaker: "user",
@@ -619,6 +679,19 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         }
       }
     );
+
+    // ── アバターの発話中はお客様の発話検知を止める ───────────────────────────
+    // キオスクのマイクは声の主を区別できず、スピーカーから出たアバターの声も拾うため、
+    // そのままでは「お客様発話中」が誤点灯する。止めるのは表示の判定のみで、
+    // 音声認識・無音ゲートの音量測定は通常どおり継続する。
+    socket.on("user:avatarSpeaking", (payload: { sessionId: string; speaking: boolean }) => {
+      const { sessionId, speaking } = payload;
+      const session = activeSessions.get(sessionId);
+      if (!session) return;
+      if (session.userSocketId !== socket.id) return; // 本人のキオスクのみ
+      session.avatarSpeaking = !!speaking;
+      if (speaking) setUserSpeaking(sessionId, session, false); // 拾った残りを消す
+    });
 
     // ── 係員が回答を準備中（マイクON／入力中）→ お客様に知らせる ────────────────
     socket.on("staff:composing", (payload: { sessionId: string; active: boolean }) => {
@@ -645,7 +718,12 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         let translatedText: string | undefined;
         let audioBase64 = "";
 
-        if (isFinal) metrics.noteStaffSpeechFinal(sessionId);
+        if (isFinal) {
+          metrics.noteStaffSpeechFinal(sessionId);
+          // 係員はマイクを切っていても、ここから翻訳・音声合成が続く。返答が実際に出るまで
+          // お客様側の「回答を準備しています」を出し続ける（お客様の画面が無反応になるのを防ぐ）。
+          io.to(session.userSocketId).emit("staff:composing", { sessionId, active: true });
+        }
 
         if (!isFinal) {
           io.to(session.staffSocketId).emit("speech:staff", { sessionId, text, isFinal: false });
@@ -752,6 +830,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
               machineName: session.machineName,
             });
             releaseSession(sessionId, session.staffSocketId);
+            clearSpeakingState(session);
             activeSessions.delete(sessionId);
             io.to(session.staffSocketId).emit("call:ended", { sessionId });
             io.to("call-queue").emit("call:ended", { sessionId });
@@ -759,6 +838,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
             // Staff disconnected — notify user with a distinct event (not call:ended)
             io.to(session.userSocketId).emit("call:staffDisconnected", { sessionId });
             releaseSession(sessionId, session.staffSocketId);
+            clearSpeakingState(session);
             activeSessions.delete(sessionId);
             io.to("call-queue").emit("call:ended", { sessionId });
           }
