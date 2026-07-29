@@ -39,7 +39,54 @@ function toKatakana(s: string): string {
   return s.replace(/[ぁ-ゖ]/g, (c) => String.fromCharCode(c.charCodeAt(0) + KANA_OFFSET));
 }
 
-export type ReadingEntry = { reading: string; kanji: string };
+// 地名によくある接尾辞漢字とその読み。読み方が一通りでない（町＝チョウ/マチ）ため、
+// 用語集の登録よみと形態素解析の読みが末尾だけ食い違うことがある。
+export const SUFFIX_KANJI: Array<{ kanji: string; readings: string[] }> = [
+  { kanji: "町", readings: ["ちょう", "まち"] },
+  { kanji: "駅", readings: ["えき"] },
+  { kanji: "線", readings: ["せん"] },
+  { kanji: "川", readings: ["がわ", "かわ"] },
+  { kanji: "山", readings: ["やま", "ざん", "さん"] },
+  { kanji: "台", readings: ["だい"] },
+  { kanji: "谷", readings: ["がや", "や", "たに", "だに"] },
+  { kanji: "前", readings: ["まえ"] },
+  { kanji: "田", readings: ["だ", "た"] },
+  { kanji: "坂", readings: ["さか", "ざか"] },
+  { kanji: "沢", readings: ["さわ", "ざわ"] },
+  { kanji: "原", readings: ["はら", "ばら"] },
+  { kanji: "塚", readings: ["つか", "づか"] },
+  { kanji: "島", readings: ["じま", "しま"] },
+  { kanji: "口", readings: ["ぐち", "くち"] },
+  { kanji: "橋", readings: ["ばし", "はし"] },
+  { kanji: "園", readings: ["えん"] },
+  { kanji: "寺", readings: ["でら", "じ"] },
+  { kanji: "里", readings: ["さと", "り"] },
+  { kanji: "区", readings: ["く"] },
+  { kanji: "市", readings: ["し"] },
+];
+
+export type ReadingEntry = { readings: string[]; kanji: string };
+
+/**
+ * 照合に使う読みの候補（カタカナ）。末尾が接尾辞漢字の語は、解析器が登録よみと違う
+ * 読みを付けることがある（狸穴町: 登録=マミアナチョウ ／ 解析=マミアナマチ）ので、
+ * 接尾辞の別読みに差し替えた形も候補に加える。
+ */
+function readingVariants(ja: string, base: string): string[] {
+  const set = new Set<string>([base]);
+  for (const suf of SUFFIX_KANJI) {
+    if (!ja.endsWith(suf.kanji)) continue;
+    const readings = suf.readings.map(toKatakana);
+    for (const r of readings) {
+      if (!base.endsWith(r) || base.length <= r.length) continue;
+      const stem = base.slice(0, -r.length);
+      for (const alt of readings) set.add(stem + alt);
+    }
+  }
+  return [...set];
+}
+
+const longestOf = (e: ReadingEntry): number => Math.max(...e.readings.map((r) => r.length));
 
 /** { 読み(カタカナ) → 漢字 }。長い読みを優先するため長さ降順で保持する。 */
 export function buildReadingMap(terms: GlossaryTerm[]): ReadingEntry[] {
@@ -48,9 +95,9 @@ export function buildReadingMap(terms: GlossaryTerm[]): ReadingEntry[] {
     const yomi = t.yomi?.trim();
     const ja = t.ja?.trim();
     if (!yomi || !ja) continue;
-    map.push({ reading: toKatakana(yomi), kanji: ja });
+    map.push({ readings: readingVariants(ja, toKatakana(yomi)), kanji: ja });
   }
-  return map.sort((a, b) => b.reading.length - a.reading.length);
+  return map.sort((a, b) => longestOf(b) - longestOf(a));
 }
 
 /**
@@ -73,15 +120,17 @@ export async function applyReadingMatch(text: string, map: ReadingEntry[]): Prom
   let i = 0;
   while (i < tokens.length) {
     let matched = false;
-    for (const { reading, kanji } of map) {
+    for (const entry of map) {
+      const { readings, kanji } = entry;
+      const longest = longestOf(entry);
       let acc = "";
       let j = i;
       while (j < tokens.length) {
         acc += readingOf(tokens[j]);
         j++;
-        if (acc.length > reading.length) break; // 行き過ぎ＝不一致
-        if (acc === reading) { out.push(kanji); i = j; matched = true; break; }
-        if (!reading.startsWith(acc)) break; // 途中で分岐＝不一致
+        if (acc.length > longest) break; // 行き過ぎ＝不一致
+        if (readings.includes(acc)) { out.push(kanji); i = j; matched = true; break; }
+        if (!readings.some((r) => r.startsWith(acc))) break; // 途中で分岐＝不一致
       }
       if (matched) break;
     }

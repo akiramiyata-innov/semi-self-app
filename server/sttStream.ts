@@ -3,7 +3,7 @@ import type { v2 } from "@google-cloud/speech";
 import { getSpeechClient, RECOGNIZER, SPEECH_MODEL } from "../lib/speechClient";
 import { getGlossaryTermsFresh } from "../lib/glossaryClient";
 import type { GlossaryTerm } from "../lib/types";
-import { buildReadingMap, applyReadingMatch, warmUpTokenizer, type ReadingEntry } from "../lib/reading";
+import { buildReadingMap, applyReadingMatch, warmUpTokenizer, SUFFIX_KANJI, type ReadingEntry } from "../lib/reading";
 import { noteSttAudio, noteSttFinal } from "./metrics";
 import { SilenceGate, chunkRms, SPEECH_RMS, MIN_SPEECH_CHUNKS } from "./silenceGate";
 
@@ -30,32 +30,6 @@ function toKatakana(s: string): string {
 function toHiragana(s: string): string {
   return s.replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - KANA_OFFSET));
 }
-
-// 地名によくある接尾辞漢字とその読み。chirp_2 は「語幹（かな）＋接尾辞（漢字）」の
-// 混在で出すことがある（例: 狸穴町→「まみあな町」）ので、その形も置換対象に含める。
-const SUFFIX_KANJI: Array<{ kanji: string; readings: string[] }> = [
-  { kanji: "町", readings: ["ちょう", "まち"] },
-  { kanji: "駅", readings: ["えき"] },
-  { kanji: "線", readings: ["せん"] },
-  { kanji: "川", readings: ["がわ", "かわ"] },
-  { kanji: "山", readings: ["やま", "ざん", "さん"] },
-  { kanji: "台", readings: ["だい"] },
-  { kanji: "谷", readings: ["がや", "や", "たに", "だに"] },
-  { kanji: "前", readings: ["まえ"] },
-  { kanji: "田", readings: ["だ", "た"] },
-  { kanji: "坂", readings: ["さか", "ざか"] },
-  { kanji: "沢", readings: ["さわ", "ざわ"] },
-  { kanji: "原", readings: ["はら", "ばら"] },
-  { kanji: "塚", readings: ["つか", "づか"] },
-  { kanji: "島", readings: ["じま", "しま"] },
-  { kanji: "口", readings: ["ぐち", "くち"] },
-  { kanji: "橋", readings: ["ばし", "はし"] },
-  { kanji: "園", readings: ["えん"] },
-  { kanji: "寺", readings: ["でら", "じ"] },
-  { kanji: "里", readings: ["さと", "り"] },
-  { kanji: "区", readings: ["く"] },
-  { kanji: "市", readings: ["し"] },
-];
 
 /** { カナ読み等 → 漢字 } の置換ペア。長い形を先に置換するため長さ降順で保持する。 */
 type Correction = { from: string; to: string };
