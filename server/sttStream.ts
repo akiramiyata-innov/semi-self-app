@@ -88,6 +88,27 @@ function buildCorrections(terms: GlossaryTerm[]): Correction[] {
 }
 
 /**
+ * 英字を含む登録語の「表記ゆれ（大文字小文字）」を登録どおりに揃える規則。
+ *
+ * chirp_2 は同じ音でも書き方が揺れる（「スイカ」→ カタカナのことも suica と英字小文字の
+ * こともある）。カナで出れば読みの置換で登録表記になるが、英字で出た場合は読みの照合対象に
+ * ならず素通りしていた。そこで英字表記も登録どおりに揃える。翻訳の用語集は大文字小文字を
+ * 区別して照合するため、ここで揃えておくと訳語の固定も正しく効くようになる。
+ */
+type CaseRule = { re: RegExp; to: string };
+function buildCaseRules(terms: GlossaryTerm[]): CaseRule[] {
+  const rules: CaseRule[] = [];
+  for (const t of terms) {
+    const ja = t.ja?.trim();
+    if (!ja || !/[A-Za-z]/.test(ja)) continue; // 英字を含む登録語だけが対象
+    const escaped = ja.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // 単語の区切りでのみ一致させる（"basic" の一部など、語の内部では反応させない）
+    rules.push({ re: new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, "gi"), to: ja });
+  }
+  return rules;
+}
+
+/**
  * Registers per-socket streaming STT (Speech-to-Text **V2**, chirp_2 model). The
  * client sends `stt:start` then raw 16kHz mono PCM chunks via `stt:audio`, and
  * receives `stt:interim` / `stt:final` transcripts in real time. `stt:stop` (or
@@ -101,6 +122,7 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
   let lang = "ja-JP";
   let phrases: string[] = [];
   let corrections: Correction[] = [];
+  let caseRules: CaseRule[] = [];
   let readingMap: ReadingEntry[] = [];
   let running = false;
   let consecutiveErrors = 0;
@@ -115,6 +137,8 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
     for (const c of corrections) {
       if (out.includes(c.from)) out = out.split(c.from).join(c.to);
     }
+    // 英字で出た登録語（suica / Suica）を登録どおりの表記（SUICA）に揃える
+    for (const r of caseRules) out = out.replace(r.re, r.to);
     return out;
   }
 
@@ -218,6 +242,7 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
     const terms = await getGlossaryTermsFresh().catch(() => [] as GlossaryTerm[]);
     phrases = terms.map((t) => t.ja).filter(Boolean);
     corrections = buildCorrections(terms);
+    caseRules = buildCaseRules(terms);
     readingMap = buildReadingMap(terms);
     warmUpTokenizer(); // 辞書ロードを先行させ、初回の確定までに準備を整える
     running = true;

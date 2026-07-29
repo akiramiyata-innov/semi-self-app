@@ -365,6 +365,28 @@ async function synthesizeChunk(text: string, voiceLangCode: string, voiceName: s
   }
 }
 
+/**
+ * 読み上げ用に、英字を含む登録語をその「よみ」へ置き換える（画面表示は変えない）。
+ *
+ * 日本語の読み上げに英大文字が来ると、音声は「ひとつの単語（すいか）」と「頭文字の略語
+ * （エスユーアイシーエー）」のどちらで読むか迷う。さらに Chirp3-HD は生成のたびに音声が
+ * 変わる（同一テキストで8回中4種類の音声を確認）ため、読み方が回によって揺れてしまう。
+ * かなで渡せば迷いようがないので、表示は登録どおり（SUICA）のまま、音声にだけ読みを渡す。
+ */
+async function toSpeakableJa(text: string): Promise<string> {
+  const terms = await getGlossaryTermsFresh().catch(() => [] as GlossaryTerm[]);
+  let out = text;
+  for (const t of terms) {
+    const ja = t.ja?.trim();
+    const yomi = t.yomi?.trim();
+    if (!ja || !yomi || !/[A-Za-z]/.test(ja)) continue; // 読み方が割れるのは英字を含む語だけ
+    const escaped = ja.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // 単語の区切りでのみ置換する（語の内部では反応させない）
+    out = out.replace(new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, "gi"), yomi);
+  }
+  return out;
+}
+
 async function synthesizeSpeech(text: string, langCode: LangCode): Promise<string> {
   const lang = getLang(langCode);
   const apiKey = getApiKey();
@@ -746,7 +768,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           audioBase64 = await synthesizeSpeech(translatedText!, userLang);
         } else {
           translatedText = text;
-          audioBase64 = await synthesizeSpeech(text, "ja");
+          // 表示は text（登録どおりの SUICA）のまま、音声には読み（すいか）を渡す
+          audioBase64 = await synthesizeSpeech(await toSpeakableJa(text), "ja");
         }
 
         io.to(session.staffSocketId).emit("speech:staff", {
