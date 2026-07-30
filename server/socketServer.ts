@@ -750,8 +750,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     // ── Speech: staff → user ──────────────────────────────────────────────────
     socket.on(
       "speech:staff",
-      async (payload: { sessionId: string; text: string; isFinal: boolean }) => {
-        const { sessionId, text, isFinal } = payload;
+      async (payload: { sessionId: string; text: string; isFinal: boolean; clientId?: string }) => {
+        const { sessionId, text, isFinal, clientId } = payload;
         const session = activeSessions.get(sessionId);
         if (!session) return;
         // Only the staff who owns this session may speak into it — guards against a
@@ -794,8 +794,10 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           audioBase64 = await synthesizeSpeech(await toSpeakableJa(text), "ja");
         }
 
+        // 係員画面には日本語の原文に加えて訳文も返す。clientId は係員側が先に表示した
+        // 吹き出しを特定するための目印（同じ文言を続けて話しても取り違えない）。
         io.to(session.staffSocketId).emit("speech:staff", {
-          sessionId, text, isFinal: true,
+          sessionId, text, isFinal: true, clientId,
           translatedText: userLang !== "ja" ? translatedText : undefined,
         });
 

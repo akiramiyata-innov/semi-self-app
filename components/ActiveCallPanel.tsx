@@ -200,6 +200,7 @@ export function ActiveCallPanel({
             entries={transcript}
             interimUserText={interimUserText}
             interimStaffText={interimStaffText}
+            userLangLabel={lang?.label}
           />
         </div>
 

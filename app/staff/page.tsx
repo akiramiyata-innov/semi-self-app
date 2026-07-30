@@ -328,6 +328,9 @@ export default function StaffPage() {
       const sid = activeListeningSession.current;
       if (!sid) return;
 
+      // 先に自分の発話を表示し、その id を clientId として送る。訳文が返ってきたら
+      // この id の吹き出しに書き足す（同じ文言を続けて話しても取り違えない）。
+      const entryId = makeId();
       setActiveSessions((prev) => {
         const next = new Map(prev);
         const session = next.get(sid);
@@ -337,14 +340,14 @@ export default function StaffPage() {
             interimStaffText: "",
             transcript: [
               ...session.transcript,
-              { id: makeId(), speaker: "staff", text, isFinal: true, timestamp: Date.now() },
+              { id: entryId, speaker: "staff", text, isFinal: true, timestamp: Date.now() },
             ],
           });
         }
         return next;
       });
 
-      socketRef.current?.emit("speech:staff", { sessionId: sid, text, isFinal: true });
+      socketRef.current?.emit("speech:staff", { sessionId: sid, text, isFinal: true, clientId: entryId });
       // ここから先の「準備しています」はサーバーが引き継ぐ（返答が届いた時点でキオスクが消す）。
       // 手元の記録だけ白紙に戻し、次の発話でまた案内を出せるようにする（通知は送らない）。
       composingSidRef.current = null;
@@ -495,6 +498,27 @@ export default function StaffPage() {
     s.on("user:speaking", (payload: { sessionId: string; speaking: boolean }) => {
       updateSession(payload.sessionId, { userSpeaking: !!payload.speaking });
     });
+
+    // 自分（係員）の発話の訳文が返ってきたら、先に表示した吹き出しに書き足す。
+    // 送った日本語と、お客様に届いた外国語の両方を係員が確認できるようにするため。
+    s.on(
+      "speech:staff",
+      (payload: { sessionId: string; isFinal: boolean; clientId?: string; translatedText?: string }) => {
+        const { sessionId, isFinal, clientId, translatedText } = payload;
+        if (!isFinal || !clientId || !translatedText) return;
+        setActiveSessions((prev) => {
+          const next = new Map(prev);
+          const session = next.get(sessionId);
+          if (!session) return prev;
+          next.set(sessionId, {
+            ...session,
+            transcript: session.transcript.map((e) =>
+              e.id === clientId ? { ...e, translatedText } : e),
+          });
+          return next;
+        });
+      }
+    );
 
     s.on(
       "speech:user",
@@ -1204,6 +1228,7 @@ export default function StaffPage() {
                   onSendText={(text) => {
                     justSentRef.current = true; // 直後の入力欄クリアで案内を消さないため
                     // Text input fallback: send as speech:staff final
+                    const entryId = makeId();
                     setActiveSessions((prev) => {
                       const next = new Map(prev);
                       const s = next.get(session.sessionId);
@@ -1213,13 +1238,13 @@ export default function StaffPage() {
                           interimStaffText: "",
                           transcript: [
                             ...s.transcript,
-                            { id: makeId(), speaker: "staff", text, isFinal: true, timestamp: Date.now() },
+                            { id: entryId, speaker: "staff", text, isFinal: true, timestamp: Date.now() },
                           ],
                         });
                       }
                       return next;
                     });
-                    socketRef.current?.emit("speech:staff", { sessionId: session.sessionId, text, isFinal: true });
+                    socketRef.current?.emit("speech:staff", { sessionId: session.sessionId, text, isFinal: true, clientId: entryId });
                     composingSidRef.current = null; // 以降はサーバーが案内を引き継ぐ
                     // Auto-OFF mic after sending — staff must press mic button again to speak
                     stopMic();

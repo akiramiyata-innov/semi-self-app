@@ -9,9 +9,15 @@ interface TranscriptPanelProps {
   entries: TranscriptEntry[];
   interimUserText?: string;
   interimStaffText?: string;
+  /**
+   * お客様の言語名（例「英語」）。訳文の見出しに使う。
+   * お客様の発話の訳文は日本語、係員の発話の訳文はお客様の言語になるため、
+   * 話者によって見出しを変える必要がある。
+   */
+  userLangLabel?: string;
 }
 
-export function TranscriptPanel({ entries, interimUserText, interimStaffText }: TranscriptPanelProps) {
+export function TranscriptPanel({ entries, interimUserText, interimStaffText, userLangLabel }: TranscriptPanelProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -47,7 +53,9 @@ export function TranscriptPanel({ entries, interimUserText, interimStaffText }: 
                   : "bg-yellow-50 border-yellow-200 text-yellow-800"
               }`}
             >
-              <span className="text-[10px] font-bold mr-1.5 opacity-50">🔤 日本語</span>
+              <span className="text-[10px] font-bold mr-1.5 opacity-50">
+                🔤 {entry.speaker === "user" ? "日本語" : (userLangLabel ?? "訳文")}
+              </span>
               {entry.translatedText}
             </div>
           )}
