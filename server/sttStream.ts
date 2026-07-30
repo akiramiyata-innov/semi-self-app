@@ -4,7 +4,7 @@ import { getSpeechClient, RECOGNIZER, SPEECH_MODEL } from "../lib/speechClient";
 import { getGlossaryTermsFresh } from "../lib/glossaryClient";
 import type { GlossaryTerm } from "../lib/types";
 import { buildReadingMap, applyReadingMatch, warmUpTokenizer, SUFFIX_KANJI, type ReadingEntry } from "../lib/reading";
-import { noteSttAudio, noteSttFinal } from "./metrics";
+import { noteSttSpeech, noteSttFinal } from "./metrics";
 import { SilenceGate, chunkRms, SPEECH_RMS, MIN_SPEECH_CHUNKS } from "./silenceGate";
 import { inspectGlossaryDump } from "./glossaryDump";
 
@@ -236,7 +236,6 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
 
   socket.on("stt:audio", (chunk: ArrayBuffer | Buffer) => {
     if (!stream) return;
-    noteSttAudio(socket.id); // 性能測定：最後に音声が届いた時刻＝発話終了の目安
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     // 音声の転送を最優先（音量測定に万一問題があっても認識用の音声は絶対に欠けさせない）
     try {
@@ -249,6 +248,8 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
     if (rms >= SPEECH_RMS) {
       voiceRun++;
       if (voiceRun >= MIN_SPEECH_CHUNKS) onVoiceActivity?.();
+      // 性能測定：声が聞こえた最後の時刻＝発話終了の基準（無音では更新しない）
+      noteSttSpeech(socket.id);
     } else {
       voiceRun = 0;
     }

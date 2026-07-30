@@ -3,7 +3,7 @@
 //
 // 測っているもの（テスト計画書の自動測定項目に対応）:
 //   callAnswerDelayMs  … 呼び出し(call:request) → 係員への着信配信(call:incoming)
-//   sttFinalDelaysMs   … 発話終了(最後の音声チャンク) → 確定テキスト(stt:final)
+//   sttFinalDelaysMs   … 発話終了(最後に声が聞こえた時刻) → 確定テキスト(stt:final)
 //   ttsDelaysMs        … 係員の発話確定(speech:staff) → 音声送出(tts:audio)
 //   disconnects        … 通話中の意図しない切断回数
 //
@@ -28,7 +28,7 @@ function empty(): SessionMetrics {
 const bySession = new Map<string, SessionMetrics>();
 const callRequestAt = new Map<string, number>();   // sessionId → 呼び出し時刻
 const staffSpeechAt = new Map<string, number>();   // sessionId → 係員の発話確定時刻
-const lastAudioAt = new Map<string, number>();     // socketId  → 最後に音声が届いた時刻
+const lastSpeechAt = new Map<string, number>();    // socketId  → 最後に「人の声」が観測された時刻
 
 /** socketId から進行中の sessionId を解決する（socketServer が登録する）。 */
 let resolveSessionId: (socketId: string) => string | null = () => null;
@@ -54,18 +54,25 @@ export function noteCallIncoming(sessionId: string): void {
 }
 
 // ── 発話終了 → 確定テキスト ───────────────────────────────────────────────
-export function noteSttAudio(socketId: string): void {
-  lastAudioAt.set(socketId, Date.now());
+// 「発話終了」は**声が聞こえなくなった時刻**で判定する。音声が届いた時刻では測れない：
+// ストリーミング時のキオスクは通話中ずっとマイクONのため、お客様が黙っている間も
+// 無音の音声データが流れ続け、「最後に音声が届いた時刻」は常に直前になってしまう
+// （実態が3秒でも0.2秒と記録される）。無音ゲートが測っているチャンク音量を使い、
+// 人の声とみなせる音量だった最後の時刻を発話終了とする。
+export function noteSttSpeech(socketId: string): void {
+  lastSpeechAt.set(socketId, Date.now());
 }
 export function noteSttFinal(socketId: string): void {
-  const t0 = lastAudioAt.get(socketId);
-  if (t0 === undefined) return;
+  const t0 = lastSpeechAt.get(socketId);
+  if (t0 === undefined) return; // 声が観測されていない＝測る対象がない
   const sessionId = resolveSessionId(socketId);
   if (!sessionId) return;
   of(sessionId).sttFinalDelaysMs.push(Date.now() - t0);
+  // 次の発話を独立して測るため、確定のたびに基準を捨てる
+  lastSpeechAt.delete(socketId);
 }
 export function clearSttSocket(socketId: string): void {
-  lastAudioAt.delete(socketId);
+  lastSpeechAt.delete(socketId);
 }
 
 // ── 係員の発話確定 → 音声送出 ─────────────────────────────────────────────
