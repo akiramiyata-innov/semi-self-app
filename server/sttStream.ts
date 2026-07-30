@@ -6,6 +6,7 @@ import type { GlossaryTerm } from "../lib/types";
 import { buildReadingMap, applyReadingMatch, warmUpTokenizer, SUFFIX_KANJI, type ReadingEntry } from "../lib/reading";
 import { noteSttAudio, noteSttFinal } from "./metrics";
 import { SilenceGate, chunkRms, SPEECH_RMS, MIN_SPEECH_CHUNKS } from "./silenceGate";
+import { inspectGlossaryDump } from "./glossaryDump";
 
 // Google streaming recognition has a per-stream time limit. Reopen the stream
 // before then so long (2 min+) speech continues seamlessly.
@@ -159,6 +160,12 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
           console.log(`[stt-gate] 無音区間のため破棄 speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)} raw=${JSON.stringify(raw)}`);
           return;
         }
+        // 用語集オウム返しガード：ヒント一覧をそのまま読み上げた形の暴走出力は破棄する。
+        const dump = inspectGlossaryDump(base, phrases);
+        if (dump.isDump) {
+          console.log(`[stt-dump] 用語集の羅列とみなし破棄 hits=${dump.hits} other=${dump.otherRatio.toFixed(2)} raw=${JSON.stringify(raw)}`);
+          return;
+        }
         // 確定時のみ、読み照合（kuromoji）で同音の別漢字も矯正する。
         const transcript = await applyReadingMatch(base, readingMap);
         // ── 診断ログ（用語集語の誤挿入調査＋無音ゲートしきい値調整）─────────
@@ -171,6 +178,7 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
       } else {
         // interim（入力中プレビュー）も同じ基準で抑止し、幻聴の「打ちかけ表示」を防ぐ
         if (!gate.hasSpeech()) return;
+        if (inspectGlossaryDump(base, phrases).isDump) return;
         socket.emit("stt:interim", { transcript: base });
       }
     });
