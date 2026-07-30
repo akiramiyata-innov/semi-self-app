@@ -27,7 +27,7 @@ export default function GlossaryPage() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<{ text: string; ok: boolean } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchTerms = async () => {
@@ -97,7 +97,7 @@ export default function GlossaryPage() {
       }).filter((r) => r.ja.trim());
 
       if (terms.length === 0) {
-        setImportResult("読み込める用語がありませんでした。1列目が「日本語」または「ja」になっているか確認してください。");
+        setImportResult({ text: "読み込める用語がありませんでした。1列目が「日本語」または「ja」になっているか確認してください。", ok: false });
         setImporting(false);
         return;
       }
@@ -109,13 +109,23 @@ export default function GlossaryPage() {
       });
       const data = await res.json();
       if (res.ok) {
-        setImportResult(`${data.added}件追加しました（${data.skipped}件は重複のためスキップ）`);
+        const notes: string[] = [];
+        if (data.duplicated) notes.push(`${data.duplicated}件は既に登録済みのためスキップ`);
+        // よみは必須なので、未入力の行は登録されない。どの語かを示して直せるようにする。
+        if (data.noYomi) {
+          const samples = (data.noYomiSamples ?? []).join("、");
+          notes.push(`${data.noYomi}件はよみが未入力のため登録できません（${samples}${data.noYomi > (data.noYomiSamples?.length ?? 0) ? " ほか" : ""}）`);
+        }
+        setImportResult({
+          text: `${data.added}件追加しました${notes.length ? `／${notes.join("／")}` : ""}`,
+          ok: !data.noYomi,
+        });
         await fetchTerms();
       } else {
-        setImportResult(data.error ?? "インポートに失敗しました");
+        setImportResult({ text: data.error ?? "インポートに失敗しました", ok: false });
       }
     } catch {
-      setImportResult("ファイルの読み込みに失敗しました");
+      setImportResult({ text: "ファイルの読み込みに失敗しました", ok: false });
     }
     setImporting(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -234,8 +244,8 @@ export default function GlossaryPage() {
         </div>
 
         {importResult && (
-          <div className={`mb-4 px-4 py-2.5 rounded-lg text-sm ${importResult.includes("追加") ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
-            {importResult}
+          <div className={`mb-4 px-4 py-2.5 rounded-lg text-sm ${importResult.ok ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
+            {importResult.text}
           </div>
         )}
 
@@ -262,7 +272,8 @@ export default function GlossaryPage() {
               </div>
               <div className="col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  よみ（ひらがな） <span className="text-gray-400 font-normal">任意 — 漢字が読みのまま表示される駅名などの補正用</span>
+                  よみ（ひらがな） <span className="text-red-500">*</span>{" "}
+                  <span className="text-gray-400 font-normal">認識した文字を登録どおりの表記に直すために使います</span>
                 </label>
                 <input
                   type="text"
@@ -270,6 +281,7 @@ export default function GlossaryPage() {
                   onChange={(e) => setForm({ ...form, yomi: e.target.value })}
                   placeholder="例：とねり（舎人）、ひもんや（碑文谷）"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  required
                 />
               </div>
               {LANG_LABELS.map((l) => (

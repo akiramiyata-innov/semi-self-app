@@ -20,11 +20,16 @@ export async function POST(req: NextRequest) {
     if (!body.ja?.trim()) {
       return NextResponse.json({ error: "日本語は必須です" }, { status: 400 });
     }
+    // よみは必須。認識結果を登録どおりの表記に直す後処理と、読み上げ（英字を含む語）が
+    // よみに依存しており、未入力だと用語を登録しても表示が直らない。
+    if (!body.yomi?.trim()) {
+      return NextResponse.json({ error: "よみは必須です（ひらがなで入力してください）" }, { status: 400 });
+    }
     const terms = await getGlossaryTerms();
     const newTerm: GlossaryTerm = {
       id: Date.now().toString(),
       ja: body.ja.trim(),
-      yomi: body.yomi?.trim() || undefined,
+      yomi: body.yomi.trim(),
       en: body.en?.trim() || undefined,
       zh: body.zh?.trim() || undefined,
       "zh-TW": body["zh-TW"]?.trim() || undefined,

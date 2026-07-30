@@ -16,13 +16,16 @@ export async function POST(req: NextRequest) {
     const existing = await getGlossaryTerms();
     const existingJa = new Set(existing.map((t) => t.ja));
 
-    const newTerms: GlossaryTerm[] = incoming
-      .filter((row) => row.ja?.trim())
+    const withJa = incoming.filter((row) => row.ja?.trim());
+    // よみは必須（画面の追加フォームと同じ扱い）。未入力の行は登録せず、件数を返して知らせる。
+    const noYomi = withJa.filter((row) => !row.yomi?.trim());
+    const newTerms: GlossaryTerm[] = withJa
+      .filter((row) => row.yomi?.trim())
       .filter((row) => !existingJa.has(row.ja!.trim()))
       .map((row) => ({
         id: Date.now().toString() + Math.random().toString(36).slice(2, 6),
         ja: row.ja!.trim(),
-        yomi: row.yomi?.trim() || undefined,
+        yomi: row.yomi!.trim(),
         en: row.en?.trim() || undefined,
         zh: row.zh?.trim() || undefined,
         "zh-TW": row["zh-TW"]?.trim() || undefined,
@@ -34,7 +37,12 @@ export async function POST(req: NextRequest) {
 
     await saveGlossaryTerms([...existing, ...newTerms]);
     invalidateGlossaryCache();
-    return NextResponse.json({ added: newTerms.length, skipped: incoming.length - newTerms.length });
+    return NextResponse.json({
+      added: newTerms.length,
+      duplicated: withJa.length - noYomi.length - newTerms.length,
+      noYomi: noYomi.length,
+      noYomiSamples: noYomi.slice(0, 5).map((row) => row.ja!.trim()),
+    });
   } catch {
     return NextResponse.json({ error: "インポートに失敗しました" }, { status: 500 });
   }
