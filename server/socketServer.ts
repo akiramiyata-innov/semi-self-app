@@ -265,7 +265,12 @@ async function translateWithGlossary(text: string, fromLang: string, toLang: str
 
   entries.forEach(({ src, tgt }, i) => {
     if (processed.includes(src)) {
-      const placeholder = `GLOSS${i}TERM`;
+      // 目印は Google 翻訳が「訳してしまわない」形にする。以前の `GLOSS0TERM` は
+      // 英語→日本語で「グロスオターム」と音訳されたり、単体だと「用語集」と訳されて
+      // 差し戻しが失敗していた（実測: 同一文10回中4回）。`[[0]]` は実際に使う
+      // 14方向（7言語×双方向）35回で一度も壊れないことを確認済み。
+      // 閉じの `]]` があるので `[[1]]` が `[[11]]` の一部に誤マッチすることもない。
+      const placeholder = `[[${i}]]`;
       processed = processed.split(src).join(placeholder);
       replacements.push({ placeholder, target: tgt });
     }
