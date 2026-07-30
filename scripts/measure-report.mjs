@@ -63,9 +63,23 @@ async function loadFromApi(base, cookieValue) {
 const logs = dir ? loadFromDir(dir) : await loadFromApi(url.replace(/\/$/, ""), cookie);
 logs.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
 
+/** 通話の終了時刻。古いログで endedAt が無い場合は開始＋通話秒数で補う。 */
+const endOf = (log) => log.endedAt || (log.startedAt ?? 0) + (log.durationSeconds ?? 0) * 1000;
+/** 時間帯が重なっていた通話の数（自分を含む）。手入力なしで同時対応を判定する。 */
+const concurrency = (log) => {
+  const s = log.startedAt ?? 0;
+  const e = endOf(log);
+  if (!s || e <= s) return 1;
+  return logs.filter((o) => {
+    const os = o.startedAt ?? 0;
+    const oe = endOf(o);
+    return os && oe > os && os < e && s < oe;
+  }).length;
+};
+
 const HEAD = [
   "No", "呼び出し→着信表示(秒)", "発話終了→確定テキスト(秒)",
-  "係員発話→アバター発話開始(秒)", "切断回数", "テキスト欠落件数", "同時接続数", "備考",
+  "係員発話→アバター発話開始(秒)", "切断回数", "同時通話数", "備考",
 ];
 const rows = [HEAD.join(",")];
 
@@ -89,8 +103,7 @@ for (const log of logs) {
     m ? sec(avg(m.sttFinalDelaysMs)) : "",
     m ? sec(avg(m.ttsDelaysMs)) : "",
     m ? (m.disconnects ?? 0) : "",
-    "",            // テキスト欠落は目視項目のため空欄
-    "",            // 同時接続数は実施時に手入力
+    concurrency(log), // 通話時間の重なりから自動判定（1＝単独、2＝2件同時…）
     `"${note.replace(/"/g, '""')}"`,
   ].join(","));
 }

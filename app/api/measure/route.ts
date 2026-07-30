@@ -30,9 +30,30 @@ async function loadLocalLogs(): Promise<SessionLog[]> {
   return out;
 }
 
+/** 通話の終了時刻。古いログで endedAt が無い場合は開始＋通話秒数で補う。 */
+function endOf(log: SessionLog): number {
+  if (log.endedAt) return log.endedAt;
+  return (log.startedAt ?? 0) + (log.durationSeconds ?? 0) * 1000;
+}
+
+/**
+ * その通話と時間帯が重なっていた通話の数（自分を含む）。
+ * 「2件同時対応時の遅延増加」を見るために必要な情報を、手入力なしで求める。
+ */
+function concurrency(log: SessionLog, all: SessionLog[]): number {
+  const s = log.startedAt ?? 0;
+  const e = endOf(log);
+  if (!s || e <= s) return 1;
+  return all.filter((o) => {
+    const os = o.startedAt ?? 0;
+    const oe = endOf(o);
+    return os && oe > os && os < e && s < oe; // 期間が少しでも重なれば同時
+  }).length;
+}
+
 function toCsv(logs: SessionLog[]): string {
   logs.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
-  const head = ["No", "呼び出し→着信表示(秒)", "発話終了→確定テキスト(秒)", "係員発話→アバター発話開始(秒)", "切断回数", "テキスト欠落件数", "同時接続数", "備考"];
+  const head = ["No", "呼び出し→着信表示(秒)", "発話終了→確定テキスト(秒)", "係員発話→アバター発話開始(秒)", "切断回数", "同時通話数", "備考"];
   const rows = [head.join(",")];
   logs.forEach((log, i) => {
     const m = log.metrics;
@@ -48,8 +69,7 @@ function toCsv(logs: SessionLog[]): string {
       m ? sec(avg(m.sttFinalDelaysMs)) : "",
       m ? sec(avg(m.ttsDelaysMs)) : "",
       m ? (m.disconnects ?? 0) : "",
-      "",  // テキスト欠落＝目視項目のため空欄
-      "",  // 同時接続数＝実施時に手入力
+      concurrency(log, logs), // 通話時間の重なりから自動判定（1＝単独、2＝2件同時…）
       csv(note),
     ].join(","));
   });
