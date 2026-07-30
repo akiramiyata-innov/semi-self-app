@@ -248,6 +248,22 @@ async function translateText(text: string, from: string, to: string): Promise<st
   return translated;
 }
 
+/**
+ * 用語集の照合に使う正規表現。**大文字小文字は区別しない**。
+ *
+ * 外国語欄に "toneri" と小文字で登録していても、英語の音声認識は固有名詞を "Toneri" と
+ * 大文字で書き出すため、区別すると訳語の固定がほとんど効かなかった（実測で確認）。
+ * 英数字だけの語は語の区切りでのみ一致させる（"toneri" が "toneriville" に当たらないように）。
+ * 日本語などの語は区切りの概念がないのでそのまま一致させる。
+ */
+function glossaryPattern(src: string): RegExp {
+  const escaped = src.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const latinOnly = /^[A-Za-z0-9 .'-]+$/.test(src);
+  return latinOnly
+    ? new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, "gi")
+    : new RegExp(escaped, "gi");
+}
+
 async function translateWithGlossary(text: string, fromLang: string, toLang: string): Promise<string> {
   const terms = await getGlossaryTermsFresh();
   // Replace longer source terms first so a short term (e.g. 東京) can't consume
@@ -264,14 +280,15 @@ async function translateWithGlossary(text: string, fromLang: string, toLang: str
   let processed = text;
 
   entries.forEach(({ src, tgt }, i) => {
-    if (processed.includes(src)) {
-      // 目印は Google 翻訳が「訳してしまわない」形にする。以前の `GLOSS0TERM` は
-      // 英語→日本語で「グロスオターム」と音訳されたり、単体だと「用語集」と訳されて
-      // 差し戻しが失敗していた（実測: 同一文10回中4回）。`[[0]]` は実際に使う
-      // 14方向（7言語×双方向）35回で一度も壊れないことを確認済み。
-      // 閉じの `]]` があるので `[[1]]` が `[[11]]` の一部に誤マッチすることもない。
-      const placeholder = `[[${i}]]`;
-      processed = processed.split(src).join(placeholder);
+    // 目印は Google 翻訳が「訳してしまわない」形にする。以前の `GLOSS0TERM` は
+    // 英語→日本語で「グロスオターム」と音訳されたり、単体だと「用語集」と訳されて
+    // 差し戻しが失敗していた（実測: 同一文10回中4回）。`[[0]]` は実際に使う
+    // 14方向（7言語×双方向）35回で一度も壊れないことを確認済み。
+    // 閉じの `]]` があるので `[[1]]` が `[[11]]` の一部に誤マッチすることもない。
+    const placeholder = `[[${i}]]`;
+    const replaced = processed.replace(glossaryPattern(src), () => placeholder);
+    if (replaced !== processed) {
+      processed = replaced;
       replacements.push({ placeholder, target: tgt });
     }
   });
