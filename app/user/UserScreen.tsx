@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
-import { PhoneCall, PhoneOff, Mic, X, Check, MessageSquareText, MessageSquareOff } from "lucide-react";
+import { PhoneCall, PhoneOff, Mic, X, Check, MessageSquareText } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { KioskHeader } from "@/components/KioskHeader";
 import { ScreenShareView } from "@/components/ScreenShareView";
@@ -36,8 +36,9 @@ const UI_TEXT: Record<string, {
   // 通話中の言語変更まわり。langLocked はマイクON中に変更しようとしたときの説明、
   // confirmQ / confirmYes は「変更後の言語」で表示する確認ダイアログの文言。
   langChange: string; langPick: string; langLocked: string; confirmQ: string; confirmYes: string;
-  // 会話のテキスト表示 ON/OFF。マイクと同じ「状態表示」に合わせ、外国語は英語表記。
-  textOn: string; textOff: string;
+  // 会話のテキスト表示スイッチの見出し。ON/OFFはスイッチの絵と英字で示すため、
+  // 文言は「何のスイッチか」だけを各言語で持つ。
+  textLabel: string;
   // 音声合成に失敗して文字だけになったときの説明。
   voiceFailed: string;
 }> = {
@@ -49,7 +50,7 @@ const UI_TEXT: Record<string, {
     langChange: "言語を変える", langPick: "言語をお選びください",
     langLocked: "マイクをOFFにすると言語を変えられます",
     confirmQ: "この言語に変更しますか？", confirmYes: "変更する",
-    textOn: "メッセージ表示ON", textOff: "メッセージ表示OFF",
+    textLabel: "メッセージ表示",
     voiceFailed: "音声をお届けできませんでした。文章をご覧ください。",
   },
   en: {
@@ -60,7 +61,7 @@ const UI_TEXT: Record<string, {
     langChange: "Change language", langPick: "Please select your language",
     langLocked: "Turn the mic off to change the language",
     confirmQ: "Change to this language?", confirmYes: "Change",
-    textOn: "Text ON", textOff: "Text OFF",
+    textLabel: "Show messages",
     voiceFailed: "The voice could not be played. Please read the message above.",
   },
   zh: {
@@ -71,7 +72,7 @@ const UI_TEXT: Record<string, {
     langChange: "更改语言", langPick: "请选择语言",
     langLocked: "请先关闭麦克风再更改语言",
     confirmQ: "要更改为该语言吗？", confirmYes: "更改",
-    textOn: "Text ON", textOff: "Text OFF",
+    textLabel: "显示文字",
     voiceFailed: "语音无法播放，请阅读上面的文字。",
   },
   "zh-TW": {
@@ -82,7 +83,7 @@ const UI_TEXT: Record<string, {
     langChange: "變更語言", langPick: "請選擇語言",
     langLocked: "請先關閉麥克風再變更語言",
     confirmQ: "要變更為此語言嗎？", confirmYes: "變更",
-    textOn: "Text ON", textOff: "Text OFF",
+    textLabel: "顯示文字",
     voiceFailed: "語音無法播放，請閱讀上方的文字。",
   },
   ko: {
@@ -93,7 +94,7 @@ const UI_TEXT: Record<string, {
     langChange: "언어 변경", langPick: "언어를 선택해 주세요",
     langLocked: "마이크를 끄면 언어를 변경할 수 있습니다",
     confirmQ: "이 언어로 변경하시겠습니까?", confirmYes: "변경",
-    textOn: "Text ON", textOff: "Text OFF",
+    textLabel: "메시지 표시",
     voiceFailed: "음성을 재생하지 못했습니다. 위의 문장을 읽어 주세요.",
   },
   fr: {
@@ -104,7 +105,7 @@ const UI_TEXT: Record<string, {
     langChange: "Changer de langue", langPick: "Veuillez choisir votre langue",
     langLocked: "Désactivez le micro pour changer de langue",
     confirmQ: "Changer pour cette langue ?", confirmYes: "Changer",
-    textOn: "Text ON", textOff: "Text OFF",
+    textLabel: "Afficher le texte",
     voiceFailed: "La voix n'a pas pu être diffusée. Veuillez lire le message ci-dessus.",
   },
   es: {
@@ -115,7 +116,7 @@ const UI_TEXT: Record<string, {
     langChange: "Cambiar idioma", langPick: "Seleccione su idioma",
     langLocked: "Desactive el micrófono para cambiar de idioma",
     confirmQ: "¿Cambiar a este idioma?", confirmYes: "Cambiar",
-    textOn: "Text ON", textOff: "Text OFF",
+    textLabel: "Mostrar texto",
     voiceFailed: "No se pudo reproducir la voz. Lea el mensaje anterior.",
   },
   th: {
@@ -126,7 +127,7 @@ const UI_TEXT: Record<string, {
     langChange: "เปลี่ยนภาษา", langPick: "กรุณาเลือกภาษา",
     langLocked: "ปิดไมโครโฟนเพื่อเปลี่ยนภาษา",
     confirmQ: "ต้องการเปลี่ยนเป็นภาษานี้หรือไม่", confirmYes: "เปลี่ยน",
-    textOn: "Text ON", textOff: "Text OFF",
+    textLabel: "แสดงข้อความ",
     voiceFailed: "ไม่สามารถเล่นเสียงได้ กรุณาอ่านข้อความด้านบน",
   },
 };
@@ -1035,23 +1036,39 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             言語のほうはマイクON中は認識中の音声を取りこぼすため変更させず、押されたら
             理由を説明する（無反応にすると壊れていると思われるため）。 */}
         <div className="shrink-0 flex justify-center items-center gap-4 pb-8">
+          {/* スイッチの見た目にしている。灰色の状態表示だと「押せない」「使えない」と
+              受け取られ、文字を出したいお客様がたどり着けなかったため。物理スイッチの
+              形は言語を問わず通じ、「今の状態」と「押せること」が同時に伝わる。 */}
           <button
             onClick={toggleTextVisible}
-            className={`flex items-center gap-3 py-2 pl-2 pr-7 rounded-full shadow-lg ring-[6px] ring-white/80 active:scale-95 transition-all ${
-              textVisible ? "bg-sky-100 hover:bg-sky-200" : "bg-white hover:bg-gray-50"
+            className={`flex items-center gap-4 py-2 pl-2 pr-6 rounded-full bg-white border-2 shadow-lg ring-[6px] ring-white/80 active:scale-95 transition-all ${
+              textVisible ? "border-sky-500 hover:bg-sky-50" : "border-[#8b5cf6] hover:bg-violet-50"
             }`}
           >
+            {/* アイコンは常に「文字が入った吹き出し」。OFF時にバツ印にすると機能が
+                使えないように見えるため、色だけで状態を示す。 */}
             <span
               className={`w-14 h-14 rounded-full flex items-center justify-center shrink-0 transition-colors ${
-                textVisible ? "bg-sky-500" : "bg-gray-400"
+                textVisible ? "bg-sky-500" : "bg-[#8b5cf6]"
               }`}
             >
-              {textVisible
-                ? <MessageSquareText size={28} strokeWidth={2.5} className="text-white" />
-                : <MessageSquareOff size={28} strokeWidth={2.5} className="text-white" />}
+              <MessageSquareText size={30} strokeWidth={2.5} className="text-white" />
             </span>
-            <span className={`text-2xl font-bold ${textVisible ? "text-sky-800" : "text-gray-500"}`}>
-              {textVisible ? ui.textOn : ui.textOff}
+            <span className="flex flex-col items-start gap-1">
+              <span className="text-xl font-bold text-gray-700 leading-none">{ui.textLabel}</span>
+              <span className="flex items-center gap-2">
+                {/* スイッチ本体 */}
+                <span
+                  className={`w-14 h-8 rounded-full flex items-center px-1 transition-colors ${
+                    textVisible ? "bg-sky-500 justify-end" : "bg-gray-300 justify-start"
+                  }`}
+                >
+                  <span className="w-6 h-6 rounded-full bg-white shadow" />
+                </span>
+                <span className={`text-lg font-bold leading-none ${textVisible ? "text-sky-700" : "text-gray-500"}`}>
+                  {textVisible ? "ON" : "OFF"}
+                </span>
+              </span>
             </span>
           </button>
 
