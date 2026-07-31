@@ -415,13 +415,23 @@ async function toSpeakableJa(text: string): Promise<string> {
   return out;
 }
 
-async function synthesizeSpeech(text: string, langCode: LangCode): Promise<string> {
+/**
+ * 音声合成の結果。`ok` は「言われたことを丸ごと音声にできたか」。
+ * 長文は分割して合成するため、一部の断片だけ失敗すると **途中が抜けた音声** に
+ * なる。無音より気づきにくいので、丸ごと失敗と同じ扱い（ok=false）にする。
+ */
+interface TtsResult {
+  audio: string;
+  ok: boolean;
+}
+
+async function synthesizeSpeech(text: string, langCode: LangCode): Promise<TtsResult> {
   const lang = getLang(langCode);
   const apiKey = getApiKey();
 
   if (!apiKey || apiKey === "your_google_api_key_here") {
     console.warn(`[tts] SKIP (no API key): "${text}" [${langCode}]`);
-    return "";
+    return { audio: "", ok: false };
   }
 
   // Derive the languageCode from the voice name's own locale prefix rather than
@@ -431,16 +441,21 @@ async function synthesizeSpeech(text: string, langCode: LangCode): Promise<strin
   const voiceLangCode = lang.ttsVoice.split("-").slice(0, 2).join("-");
 
   const chunks = splitForTts(text);
-  if (!chunks.length) return "";
+  if (!chunks.length) return { audio: "", ok: false };
 
   // Synthesize the pieces in parallel, then join the MP3 bytes in order.
   const parts = await Promise.all(chunks.map((c) => synthesizeChunk(c, voiceLangCode, lang.ttsVoice, apiKey, langCode)));
   const buffers = parts.filter((b): b is Buffer => b !== null);
-  if (!buffers.length) return "";
+  if (!buffers.length) return { audio: "", ok: false };
 
   const combined = Buffer.concat(buffers);
+  // 1つでも欠けたら「途中が抜けた音声」なので、丸ごと失敗と同じ扱いにする。
+  const ok = buffers.length === chunks.length;
+  if (!ok) {
+    console.error(`[tts] 一部の断片が合成できなかった [${langCode}] ${buffers.length}/${chunks.length} part(s)`);
+  }
   console.log(`[tts] synthesized "${text.slice(0, 30)}${text.length > 30 ? "…" : ""}" [${langCode}] in ${chunks.length} part(s) → ${combined.length} bytes`);
-  return combined.toString("base64");
+  return { audio: combined.toString("base64"), ok };
 }
 
 function generateSessionId(): string {
@@ -768,6 +783,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         const userLang = session.userLang;
         let translatedText: string | undefined;
         let audioBase64 = "";
+        let tts: TtsResult = { audio: "", ok: false };
 
         if (isFinal) {
           metrics.noteStaffSpeechFinal(sessionId);
@@ -794,12 +810,13 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
             io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "jaToUser" });
             translatedText = text; // fallback: send Japanese text as-is
           }
-          audioBase64 = await synthesizeSpeech(translatedText!, userLang);
+          tts = await synthesizeSpeech(translatedText!, userLang);
         } else {
           translatedText = text;
           // 表示は text（登録どおりの SUICA）のまま、音声には読み（すいか）を渡す
-          audioBase64 = await synthesizeSpeech(await toSpeakableJa(text), "ja");
+          tts = await synthesizeSpeech(await toSpeakableJa(text), "ja");
         }
+        audioBase64 = tts.audio;
 
         // 係員画面には日本語の原文に加えて訳文も返す。clientId は係員側が先に表示した
         // 吹き出しを特定するための目印（同じ文言を続けて話しても取り違えない）。
@@ -808,11 +825,24 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           translatedText: userLang !== "ja" ? translatedText : undefined,
         });
 
-        io.to(session.userSocketId).emit("speech:staff", { sessionId, text: translatedText, isFinal: true });
+        // 音声を丸ごと届けられなかったときは、テキスト非表示の設定であっても
+        // この1件だけは文字を出す（音声も文字も無い＝お客様に何も届かない状態を防ぐ）。
+        io.to(session.userSocketId).emit("speech:staff", {
+          sessionId, text: translatedText, isFinal: true,
+          forceShowText: !tts.ok,
+        });
 
         if (audioBase64) {
           io.to(session.userSocketId).emit("tts:audio", { sessionId, audioBase64, lang: userLang });
           metrics.noteTtsSent(sessionId);
+        }
+
+        // 係員は自分の発言が普通に表示されるため、音声が届かなかったことに気づけない。
+        // 言い直せるように知らせる。partial=途中が抜けた音声が再生された場合。
+        if (!tts.ok) {
+          const partial = audioBase64.length > 0;
+          io.to(session.staffSocketId).emit("error:tts", { sessionId, partial });
+          console.error(`[tts] 音声を届けられなかった session=${sessionId} partial=${partial}`);
         }
 
         session.transcript.push({

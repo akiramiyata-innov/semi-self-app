@@ -37,6 +37,8 @@ const UI_TEXT: Record<string, {
   langChange: string; langPick: string; langLocked: string; confirmQ: string; confirmYes: string;
   // 会話のテキスト表示 ON/OFF。マイクと同じ「状態表示」に合わせ、外国語は英語表記。
   textOn: string; textOff: string;
+  // 音声合成に失敗して文字だけになったときの説明。
+  voiceFailed: string;
 }> = {
   ja: {
     delivered: "係員に伝わりました", composing: "係員が回答を準備しています",
@@ -47,6 +49,7 @@ const UI_TEXT: Record<string, {
     langLocked: "マイクをOFFにすると言語を変えられます",
     confirmQ: "この言語に変更しますか？", confirmYes: "変更する",
     textOn: "メッセージ表示ON", textOff: "メッセージ表示OFF",
+    voiceFailed: "音声をお届けできませんでした。文章をご覧ください。",
   },
   en: {
     delivered: "Delivered to staff", composing: "Staff is preparing a reply",
@@ -57,6 +60,7 @@ const UI_TEXT: Record<string, {
     langLocked: "Turn the mic off to change the language",
     confirmQ: "Change to this language?", confirmYes: "Change",
     textOn: "Text ON", textOff: "Text OFF",
+    voiceFailed: "The voice could not be played. Please read the message above.",
   },
   zh: {
     delivered: "已送达工作人员", composing: "工作人员正在准备回复",
@@ -67,6 +71,7 @@ const UI_TEXT: Record<string, {
     langLocked: "请先关闭麦克风再更改语言",
     confirmQ: "要更改为该语言吗？", confirmYes: "更改",
     textOn: "Text ON", textOff: "Text OFF",
+    voiceFailed: "语音无法播放，请阅读上面的文字。",
   },
   "zh-TW": {
     delivered: "已送達服務人員", composing: "服務人員正在準備回覆",
@@ -77,6 +82,7 @@ const UI_TEXT: Record<string, {
     langLocked: "請先關閉麥克風再變更語言",
     confirmQ: "要變更為此語言嗎？", confirmYes: "變更",
     textOn: "Text ON", textOff: "Text OFF",
+    voiceFailed: "語音無法播放，請閱讀上方的文字。",
   },
   ko: {
     delivered: "담당자에게 전달되었습니다", composing: "담당자가 답변을 준비하고 있습니다",
@@ -87,6 +93,7 @@ const UI_TEXT: Record<string, {
     langLocked: "마이크를 끄면 언어를 변경할 수 있습니다",
     confirmQ: "이 언어로 변경하시겠습니까?", confirmYes: "변경",
     textOn: "Text ON", textOff: "Text OFF",
+    voiceFailed: "음성을 재생하지 못했습니다. 위의 문장을 읽어 주세요.",
   },
   fr: {
     delivered: "Transmis à l'agent", composing: "L'agent prépare une réponse",
@@ -97,6 +104,7 @@ const UI_TEXT: Record<string, {
     langLocked: "Désactivez le micro pour changer de langue",
     confirmQ: "Changer pour cette langue ?", confirmYes: "Changer",
     textOn: "Text ON", textOff: "Text OFF",
+    voiceFailed: "La voix n'a pas pu être diffusée. Veuillez lire le message ci-dessus.",
   },
   es: {
     delivered: "Enviado al personal", composing: "El personal está preparando una respuesta",
@@ -107,6 +115,7 @@ const UI_TEXT: Record<string, {
     langLocked: "Desactive el micrófono para cambiar de idioma",
     confirmQ: "¿Cambiar a este idioma?", confirmYes: "Cambiar",
     textOn: "Text ON", textOff: "Text OFF",
+    voiceFailed: "No se pudo reproducir la voz. Lea el mensaje anterior.",
   },
   th: {
     delivered: "ส่งถึงเจ้าหน้าที่แล้ว", composing: "เจ้าหน้าที่กำลังเตรียมคำตอบ",
@@ -117,6 +126,7 @@ const UI_TEXT: Record<string, {
     langLocked: "ปิดไมโครโฟนเพื่อเปลี่ยนภาษา",
     confirmQ: "ต้องการเปลี่ยนเป็นภาษานี้หรือไม่", confirmYes: "เปลี่ยน",
     textOn: "Text ON", textOff: "Text OFF",
+    voiceFailed: "ไม่สามารถเล่นเสียงได้ กรุณาอ่านข้อความด้านบน",
   },
 };
 
@@ -188,6 +198,9 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   // 会話のテキストを画面に出すか。**既定は非表示**。お客様側・係員側のどちらからでも
   // 切り替えられ、状態はサーバーが持つ（後から操作したほうが勝つ）。
   const [textVisible, setTextVisible] = useState(false);
+  // 音声を届けられなかった発言のid。テキスト非表示の設定でも、この分だけは文字を出す
+  // （音声も文字も無い＝お客様に何も届かない状態を防ぐための例外）。
+  const [forcedTextIds, setForcedTextIds] = useState<string[]>([]);
   const [showConnectWarning, setShowConnectWarning] = useState(false);
   const [deliveredIds, setDeliveredIds] = useState<string[]>([]); // 係員に届いた発言のid
   const [staffComposing, setStaffComposing] = useState(false);    // 係員が回答を準備中
@@ -459,6 +472,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     setStaffComposing(false);
     // テキスト表示は通話ごとに既定（非表示）へ戻す。前のお客様の設定を引き継がない。
     setTextVisible(false);
+    setForcedTextIds([]);
     setLangPanelOpen(false);
     setPendingLang(null);
   }, [stopMic]);
@@ -546,11 +560,13 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       setTextVisible(!!payload.visible);
     });
 
-    s.on("speech:staff", (payload: { text: string; isFinal: boolean }) => {
+    s.on("speech:staff", (payload: { text: string; isFinal: boolean; forceShowText?: boolean }) => {
       setStaffComposing(false); // 返事が来た（途中表示でも）＝準備中の表示は不要
       if (payload.isFinal) {
         setInterimStaff("");
-        addEntry({ speaker: "staff", text: payload.text, isFinal: true });
+        const entryId = addEntry({ speaker: "staff", text: payload.text, isFinal: true });
+        // 音声を届けられなかった＝この1件は設定に関わらず文字で出す
+        if (payload.forceShowText) setForcedTextIds((prev) => [...prev, entryId]);
         setLatestAudio(undefined);
         lastAvatarTextRef.current = payload.text;
         // Auto-OFF mic when staff speaks — user must press mic button to respond
@@ -794,8 +810,11 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             「係員に伝わりました」「係員が回答を準備しています」は状況を伝える表示
             なので、音声をテキスト化したものではなく、OFFでも残す。 */}
         <div className="flex-1 overflow-y-auto flex flex-col gap-4 pr-1">
-          {textVisible &&
-            transcript.map((entry) => (
+          {transcript.map((entry) => {
+            // 音声を届けられなかった発言だけは、非表示の設定でも出す。
+            const forced = forcedTextIds.includes(entry.id);
+            if (!textVisible && !forced) return null;
+            return (
               <div key={entry.id} className="max-w-[90%]">
                 <div
                   className={`rounded-3xl px-7 py-4 text-2xl font-medium leading-snug shadow-sm ${
@@ -806,6 +825,10 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
                 >
                   {entry.text}
                 </div>
+                {/* 声が出せなかったことを伝える。無いと「なぜ急に文字だけ？」となる。 */}
+                {forced && (
+                  <p className="mt-1.5 ml-2 text-lg text-gray-500">{ui.voiceFailed}</p>
+                )}
                 {/* 係員の画面に届いた合図。待っている間の「伝わったのか」という不安に応える。 */}
                 {entry.speaker === "user" && deliveredIds.includes(entry.id) && (
                   <p className="mt-1.5 ml-2 flex items-center gap-1.5 text-lg text-gray-500">
@@ -814,7 +837,8 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
                   </p>
                 )}
               </div>
-            ))}
+            );
+          })}
 
           {/* テキスト非表示のときは吹き出しがないので、「伝わりました」を単独で出す
               （直前の発言が届いたときだけ）。 */}

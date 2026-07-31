@@ -445,6 +445,15 @@ export default function StaffPage() {
       addToast(`${payload.machineName}のユーザーとの接続が切れました`, "error");
     });
 
+    // 音声合成に失敗した。係員の画面には自分の発言が普通に出るため、知らせないと
+    // 「伝わった」と思ったまま進んでしまう。お客様側には文字だけ出している。
+    s.on("error:tts", (payload: { sessionId: string; partial: boolean }) => {
+      const msg = payload.partial
+        ? "音声を最後まで届けられませんでした（途中が抜けています）。お客様の画面には文字で表示しました。短く区切って言い直してください。"
+        : "音声をお届けできませんでした。お客様の画面には文字で表示しました。短く区切って言い直してください。";
+      addToast(msg, "error");
+    });
+
     // S4: translation failed
     s.on("error:translation", (payload: { sessionId: string; direction: string }) => {
       const msg = payload.direction === "jaToUser"
