@@ -137,6 +137,16 @@ const CANCEL_BUTTON = {
   background: "linear-gradient(180deg, #e9dff6 0%, #c8b2e4 100%)",
 } as const;
 
+// マイクボタン。キャンセルと同じ「立体的な丸ボタン」の見た目にそろえたうえで、
+// OFF は灰色、ON は桃色にして、いま録っているかどうかが色で分かるようにする。
+const MIC_BUTTON_OFF = {
+  background: "linear-gradient(180deg, #f6f7f9 0%, #d9dde3 100%)",
+} as const;
+
+const MIC_BUTTON_ON = {
+  background: "linear-gradient(180deg, #fde7f0 0%, #f4a6c6 100%)",
+} as const;
+
 interface UserScreenProps {
   machineId: string;
   machineName: string;
@@ -802,45 +812,33 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             {ui.cancel}
           </button>
 
-          {/* 言語の選び直し。マイクON中は認識中の音声を取りこぼすため変更させず、
-              押されたら理由を説明する（無反応にすると壊れていると思われるため）。 */}
-          <button
-            onClick={() => setLangPanelOpen(true)}
-            className={`flex items-center gap-3 bg-white rounded-2xl px-5 py-4 shadow-md active:scale-[0.98] transition-all shrink-0 ${
-              listening ? "opacity-50" : "hover:bg-gray-50"
-            }`}
-          >
-            {/* マイクボタンのアイコンと同じ大きさの丸にして、操作列の高さをそろえる。 */}
-            <span className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center shrink-0 text-3xl leading-none">
-              {langConfig?.flag}
-            </span>
-            <span className="text-lg text-gray-700 font-medium">{ui.langChange}</span>
-          </button>
-
           <button
             onClick={toggleMic}
-            className="flex-1 flex items-center gap-4 bg-white rounded-2xl px-5 py-4 shadow-md hover:bg-gray-50 active:scale-[0.98] transition-all text-left"
+            style={listening ? MIC_BUTTON_ON : MIC_BUTTON_OFF}
+            className={`flex-1 flex items-center gap-4 py-2.5 pl-2.5 pr-9 active:scale-95 rounded-full shadow-lg ring-[6px] ring-white/80 transition-all text-left ${
+              listening ? "text-[#a3306a]" : "text-gray-500"
+            }`}
           >
             <div
-              className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 relative transition-colors ${
-                listening ? "bg-pink-400" : "bg-gray-300"
+              className={`w-14 h-14 rounded-full flex items-center justify-center shrink-0 relative transition-colors ${
+                listening ? "bg-[#ec4899]" : "bg-gray-400"
               }`}
             >
               {listening && (
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-pink-300 opacity-60 rounded-full" />
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-pink-300 opacity-60" />
               )}
-              <Mic size={22} className="text-white relative z-10" />
+              <Mic size={30} strokeWidth={3} className="text-white relative z-10" />
             </div>
             <div className="flex-1 overflow-hidden">
               {listening ? (
-                <p className="text-lg text-gray-700 leading-relaxed line-clamp-2">
-                  <span className="font-semibold">{ui.micOn}</span>
-                  {interimUser && <span className="ml-2 text-gray-500">{interimUser}</span>}
+                <p className="leading-snug line-clamp-2">
+                  <span className="text-3xl font-bold">{ui.micOn}</span>
+                  {interimUser && <span className="ml-3 text-xl text-gray-700">{interimUser}</span>}
                 </p>
               ) : micError ? (
                 <p className="text-base text-red-500">{micError}</p>
               ) : (
-                <p className="text-gray-400 text-lg">{ui.micOff}</p>
+                <p className="text-3xl font-bold">{ui.micOff}</p>
               )}
             </div>
           </button>
@@ -865,6 +863,23 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             visible
             size="xl"
           />
+        </div>
+
+        {/* 言語の選び直し。アバターの下に置く。マイクON中は認識中の音声を取りこぼす
+            ため変更させず、押されたら理由を説明する（無反応にすると壊れていると
+            思われるため）。 */}
+        <div className="shrink-0 flex justify-center pb-8">
+          <button
+            onClick={() => setLangPanelOpen(true)}
+            className={`flex items-center gap-3 bg-white py-2 pl-2 pr-7 rounded-full shadow-lg ring-[6px] ring-white/80 active:scale-95 transition-all ${
+              listening ? "opacity-50" : "hover:bg-gray-50"
+            }`}
+          >
+            <span className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center shrink-0 text-4xl leading-none">
+              {langConfig?.flag}
+            </span>
+            <span className="text-2xl text-gray-700 font-bold">{ui.langChange}</span>
+          </button>
         </div>
       </div>
       </div>
