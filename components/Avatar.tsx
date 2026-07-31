@@ -65,7 +65,6 @@ export function Avatar({
   visible = true,
   size = "lg",
 }: AvatarProps) {
-  const [speaking, setSpeaking] = useState(false);
   const [entered, setEntered] = useState(false);
   const [mouth, setMouth] = useState<MouthShape>("closed");
   // The currently-playing Google TTS node, kept so we can stop it if the call
@@ -127,7 +126,6 @@ export function Avatar({
     if (!buffer) {
       // Queue drained — now (and only now) the avatar stops "speaking".
       sourceRef.current = null;
-      setSpeaking(false);
       onSpeakingRef.current?.(false);
       stopMouth();
       return;
@@ -144,7 +142,6 @@ export function Avatar({
 
     source.onended = () => playNext(ctx);
     sourceRef.current = source;
-    setSpeaking(true);
     onSpeakingRef.current?.(true);
     source.start();
 
@@ -240,19 +237,9 @@ export function Avatar({
           />
         ))}
       </div>
-      {/* 話していないときは何も出さない（以前の「お気軽にどうぞ」は外国語のお客様には
-          読めないため削除した）。 */}
-      <div className="text-center shrink-0">
-        {speaking && (
-          <span className="inline-flex items-center gap-1.5 text-sm text-blue-600 font-medium">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" />
-            </span>
-            お話し中...
-          </span>
-        )}
-      </div>
+      {/* アバターの下には何も表示しない（「お気軽にどうぞ」「お話し中...」は
+          外国語のお客様には読めないため削除した）。発話中かどうかは
+          onSpeakingChange で親へ伝えており、画面表示には使っていない。 */}
     </div>
   );
 }
