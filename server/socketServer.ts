@@ -853,9 +853,20 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     });
 
     // ── Language update ───────────────────────────────────────────────────────
+    // お客様が通話中に言語を選び直したとき。これ以降の翻訳先とアバターの声の言語は
+    // session.userLang を都度参照しているので、書き換えた時点から新しい言語になる。
     socket.on("session:setLang", (payload: { sessionId: string; lang: LangCode }) => {
       const session = activeSessions.get(payload.sessionId);
-      if (session && session.userSocketId === socket.id) session.userLang = payload.lang;
+      // 本人（このセッションのキオスク）以外からの変更は受け付けない。
+      if (!session || session.userSocketId !== socket.id) return;
+      if (session.userLang === payload.lang) return;
+      session.userLang = payload.lang;
+      // 係員画面の言語表示（相手の言語ラベル・訳文の見出し）を追従させる。
+      io.to(session.staffSocketId).emit("session:langChanged", {
+        sessionId: payload.sessionId,
+        lang: payload.lang,
+      });
+      console.log(`[lang] session=${payload.sessionId} → ${payload.lang}`);
     });
 
     // ── Disconnect cleanup ────────────────────────────────────────────────────

@@ -32,54 +32,81 @@ const ERR: Record<string, { noStaff: string; noStaffSub: string; disconnected: s
 const UI_TEXT: Record<string, {
   delivered: string; composing: string; heading: string; cancel: string; notice: string;
   micOn: string; micOff: string;
+  // 通話中の言語変更まわり。langLocked はマイクON中に変更しようとしたときの説明、
+  // confirmQ / confirmYes は「変更後の言語」で表示する確認ダイアログの文言。
+  langChange: string; langPick: string; langLocked: string; confirmQ: string; confirmYes: string;
 }> = {
   ja: {
     delivered: "係員に伝わりました", composing: "係員が回答を準備しています",
     heading: "ご用件をお伺いします。", cancel: "キャンセル",
     notice: "AIで自動文字起こしをしています。",
     micOn: "マイクON", micOff: "マイクOFF",
+    langChange: "言語を変える", langPick: "言語をお選びください",
+    langLocked: "マイクをOFFにすると言語を変えられます",
+    confirmQ: "この言語に変更しますか？", confirmYes: "変更する",
   },
   en: {
     delivered: "Delivered to staff", composing: "Staff is preparing a reply",
     heading: "How may we help you?", cancel: "Cancel",
     notice: "Speech is transcribed and translated automatically by AI.",
     micOn: "Mic ON", micOff: "Mic OFF",
+    langChange: "Change language", langPick: "Please select your language",
+    langLocked: "Turn the mic off to change the language",
+    confirmQ: "Change to this language?", confirmYes: "Change",
   },
   zh: {
     delivered: "已送达工作人员", composing: "工作人员正在准备回复",
     heading: "请问有什么可以帮您？", cancel: "Cancel",
     notice: "语音由AI自动转写并翻译。",
     micOn: "Mic ON", micOff: "Mic OFF",
+    langChange: "更改语言", langPick: "请选择语言",
+    langLocked: "请先关闭麦克风再更改语言",
+    confirmQ: "要更改为该语言吗？", confirmYes: "更改",
   },
   "zh-TW": {
     delivered: "已送達服務人員", composing: "服務人員正在準備回覆",
     heading: "請問有什麼可以為您服務？", cancel: "Cancel",
     notice: "語音由AI自動轉寫並翻譯。",
     micOn: "Mic ON", micOff: "Mic OFF",
+    langChange: "變更語言", langPick: "請選擇語言",
+    langLocked: "請先關閉麥克風再變更語言",
+    confirmQ: "要變更為此語言嗎？", confirmYes: "變更",
   },
   ko: {
     delivered: "담당자에게 전달되었습니다", composing: "담당자가 답변을 준비하고 있습니다",
     heading: "무엇을 도와드릴까요?", cancel: "Cancel",
     notice: "음성은 AI가 자동으로 텍스트로 변환하고 번역합니다.",
     micOn: "Mic ON", micOff: "Mic OFF",
+    langChange: "언어 변경", langPick: "언어를 선택해 주세요",
+    langLocked: "마이크를 끄면 언어를 변경할 수 있습니다",
+    confirmQ: "이 언어로 변경하시겠습니까?", confirmYes: "변경",
   },
   fr: {
     delivered: "Transmis à l'agent", composing: "L'agent prépare une réponse",
     heading: "Comment pouvons-nous vous aider ?", cancel: "Cancel",
     notice: "La parole est transcrite et traduite automatiquement par IA.",
     micOn: "Mic ON", micOff: "Mic OFF",
+    langChange: "Changer de langue", langPick: "Veuillez choisir votre langue",
+    langLocked: "Désactivez le micro pour changer de langue",
+    confirmQ: "Changer pour cette langue ?", confirmYes: "Changer",
   },
   es: {
     delivered: "Enviado al personal", composing: "El personal está preparando una respuesta",
     heading: "¿En qué podemos ayudarle?", cancel: "Cancel",
     notice: "El habla se transcribe y traduce automáticamente mediante IA.",
     micOn: "Mic ON", micOff: "Mic OFF",
+    langChange: "Cambiar idioma", langPick: "Seleccione su idioma",
+    langLocked: "Desactive el micrófono para cambiar de idioma",
+    confirmQ: "¿Cambiar a este idioma?", confirmYes: "Cambiar",
   },
   th: {
     delivered: "ส่งถึงเจ้าหน้าที่แล้ว", composing: "เจ้าหน้าที่กำลังเตรียมคำตอบ",
     heading: "มีอะไรให้เราช่วยเหลือไหม", cancel: "Cancel",
     notice: "ระบบ AI จะถอดเสียงและแปลโดยอัตโนมัติ",
     micOn: "Mic ON", micOff: "Mic OFF",
+    langChange: "เปลี่ยนภาษา", langPick: "กรุณาเลือกภาษา",
+    langLocked: "ปิดไมโครโฟนเพื่อเปลี่ยนภาษา",
+    confirmQ: "ต้องการเปลี่ยนเป็นภาษานี้หรือไม่", confirmYes: "เปลี่ยน",
   },
 };
 
@@ -135,6 +162,9 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   const [latestAudio, setLatestAudio] = useState<string | undefined>(undefined);
 
   const [staffScreenFrame, setStaffScreenFrame] = useState<string | null>(null);
+  // 通話中の言語変更。パネルを開いてから言語を選び、確認してはじめて切り替わる。
+  const [langPanelOpen, setLangPanelOpen] = useState(false);
+  const [pendingLang, setPendingLang] = useState<LangCode | null>(null);
   const [showConnectWarning, setShowConnectWarning] = useState(false);
   const [deliveredIds, setDeliveredIds] = useState<string[]>([]); // 係員に届いた発言のid
   const [staffComposing, setStaffComposing] = useState(false);    // 係員が回答を準備中
@@ -289,6 +319,23 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       startMic(langConfig?.bcp47);
     }
   }, [stopMic, startMic, langConfig]);
+
+  // 通話中の言語変更を確定する。マイクOFF時しか呼ばれないので、認識中のストリームを
+  // 張り替える必要はない（次にマイクをONにしたとき新しい言語で始まる）。翻訳とアバターの
+  // 声はサーバーが毎回この言語を見るため、切り替えた直後から新しい言語になる。
+  const confirmLangChange = useCallback(() => {
+    if (!pendingLang) return;
+    setUserLang(pendingLang);
+    setPendingLang(null);
+    setLangPanelOpen(false);
+    const sid = sessionIdRef.current;
+    if (sid) socketRef.current?.emit("session:setLang", { sessionId: sid, lang: pendingLang });
+  }, [pendingLang]);
+
+  const closeLangPanel = useCallback(() => {
+    setLangPanelOpen(false);
+    setPendingLang(null);
+  }, []);
 
   // Track the most recent text the avatar spoke — used to filter echo
   const lastAvatarTextRef = useRef<string>("");
@@ -532,6 +579,9 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
 
   const errMsg = ERR[userLang] ?? ERR.ja;
   const ui = UI_TEXT[userLang] ?? UI_TEXT.ja;
+  // 言語変更の確認ダイアログは「変更後の言語」で出すため、その言語の設定と文言を先に引く。
+  const pendingLangConfig = pendingLang ? SUPPORTED_LANGS.find((l) => l.code === pendingLang) : undefined;
+  const pendingUi = pendingLang ? (UI_TEXT[pendingLang] ?? UI_TEXT.ja) : undefined;
 
   // --- No Staff ---
   if (phase === "no-staff") {
@@ -752,6 +802,21 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             {ui.cancel}
           </button>
 
+          {/* 言語の選び直し。マイクON中は認識中の音声を取りこぼすため変更させず、
+              押されたら理由を説明する（無反応にすると壊れていると思われるため）。 */}
+          <button
+            onClick={() => setLangPanelOpen(true)}
+            className={`flex items-center gap-3 bg-white rounded-2xl px-5 py-4 shadow-md active:scale-[0.98] transition-all shrink-0 ${
+              listening ? "opacity-50" : "hover:bg-gray-50"
+            }`}
+          >
+            {/* マイクボタンのアイコンと同じ大きさの丸にして、操作列の高さをそろえる。 */}
+            <span className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center shrink-0 text-3xl leading-none">
+              {langConfig?.flag}
+            </span>
+            <span className="text-lg text-gray-700 font-medium">{ui.langChange}</span>
+          </button>
+
           <button
             onClick={toggleMic}
             className="flex-1 flex items-center gap-4 bg-white rounded-2xl px-5 py-4 shadow-md hover:bg-gray-50 active:scale-[0.98] transition-all text-left"
@@ -803,6 +868,89 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         </div>
       </div>
       </div>
+
+      {/* 言語の選び直し（一覧 →「確認」→ 切替）。押し間違いをそのまま通さないため、
+          必ず確認を1枚挟む。確認は「変更後の言語」で出しつつ、押し間違えても分かるよう
+          「今の言語」でも併記する。 */}
+      {langPanelOpen && (
+        <div
+          className="absolute inset-0 z-40 bg-black/40 flex items-center justify-center p-10"
+          onClick={closeLangPanel}
+        >
+          <div
+            className="bg-white rounded-3xl shadow-2xl px-12 py-10 w-full max-w-3xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {listening ? (
+              // マイクON中は変更させない（認識中の音声を取りこぼすため）
+              <>
+                <p className="text-3xl font-bold text-gray-900 text-center leading-snug">{ui.langLocked}</p>
+                <div className="mt-10 flex justify-center">
+                  <button
+                    onClick={closeLangPanel}
+                    className="px-10 py-4 rounded-full bg-gray-200 hover:bg-gray-300 active:scale-95 text-2xl font-bold text-gray-700 transition-all"
+                  >
+                    {ui.cancel}
+                  </button>
+                </div>
+              </>
+            ) : pendingLang && pendingLangConfig && pendingUi ? (
+              <>
+                <div className="flex flex-col items-center gap-3">
+                  <span className="text-7xl leading-none">{pendingLangConfig.flag}</span>
+                  <span className="text-4xl font-bold text-gray-900">{pendingLangConfig.label}</span>
+                </div>
+                {/* 変更後の言語で尋ねる。押し間違えても意味が分かるよう今の言語でも併記する。 */}
+                <p className="mt-8 text-3xl font-bold text-gray-900 text-center leading-snug">{pendingUi.confirmQ}</p>
+                <p className="mt-2 text-xl text-gray-500 text-center">{ui.confirmQ}</p>
+                <div className="mt-10 flex items-center justify-center gap-5">
+                  <button
+                    onClick={closeLangPanel}
+                    className="px-10 py-4 rounded-full bg-gray-200 hover:bg-gray-300 active:scale-95 text-2xl font-bold text-gray-700 transition-all"
+                  >
+                    {ui.cancel}
+                  </button>
+                  <button
+                    onClick={confirmLangChange}
+                    className="px-10 py-4 rounded-full bg-[#8b5cf6] hover:bg-[#7c3aed] active:scale-95 text-2xl font-bold text-white shadow-lg transition-all"
+                  >
+                    {pendingUi.confirmYes}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-3xl font-bold text-gray-900 text-center">{ui.langPick}</p>
+                <div className="mt-8 grid grid-cols-4 gap-4">
+                  {SUPPORTED_LANGS.map((l) => (
+                    <button
+                      key={l.code}
+                      onClick={() => setPendingLang(l.code)}
+                      disabled={l.code === userLang}
+                      className={`flex flex-col items-center gap-2 rounded-2xl p-5 border-2 transition-all ${
+                        l.code === userLang
+                          ? "border-[#8b5cf6] bg-violet-50 opacity-60"
+                          : "border-gray-200 hover:border-[#8b5cf6] hover:bg-violet-50 active:scale-95"
+                      }`}
+                    >
+                      <span className="text-5xl leading-none">{l.flag}</span>
+                      <span className="text-base font-medium text-gray-800">{l.label}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-8 flex justify-center">
+                  <button
+                    onClick={closeLangPanel}
+                    className="px-10 py-4 rounded-full bg-gray-200 hover:bg-gray-300 active:scale-95 text-2xl font-bold text-gray-700 transition-all"
+                  >
+                    {ui.cancel}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

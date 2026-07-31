@@ -499,6 +499,12 @@ export default function StaffPage() {
       updateSession(payload.sessionId, { userSpeaking: !!payload.speaking });
     });
 
+    // お客様が通話中に言語を選び直したら、係員画面の言語表示（相手の言語ラベル・
+    // 訳文の見出し）も追従させる。
+    s.on("session:langChanged", (payload: { sessionId: string; lang: LangCode }) => {
+      updateSession(payload.sessionId, { userLang: payload.lang });
+    });
+
     // 自分（係員）の発話の訳文が返ってきたら、先に表示した吹き出しに書き足す。
     // 送った日本語と、お客様に届いた外国語の両方を係員が確認できるようにするため。
     s.on(
