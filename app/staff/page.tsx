@@ -1220,6 +1220,7 @@ export default function StaffPage() {
                   isCapturing={capturing && captureSessionRef.current === session.sessionId}
                   micError={micError}
                   quickReplies={quickReplies}
+                  soloView={sessions.length === 1}
                   onToggleMic={() => toggleMic(session.sessionId)}
                   onToggleScreenShare={() => toggleScreenShare(session.sessionId)}
                   onEnd={() => endSession(session.sessionId)}

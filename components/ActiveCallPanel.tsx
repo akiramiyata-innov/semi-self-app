@@ -30,6 +30,11 @@ interface ActiveCallPanelProps {
   userSpeaking?: boolean;
   /** Staff's saved quick-reply phrases, shown as one-tap send buttons. */
   quickReplies?: string[];
+  /**
+   * 通話が1件だけで画面を独占しているか。券面カメラを大きく表示してよい状態を指す。
+   * 複数通話で画面が分割されているときは場所が足りないので従来の大きさのままにする。
+   */
+  soloView?: boolean;
 }
 
 export function ActiveCallPanel({
@@ -49,6 +54,7 @@ export function ActiveCallPanel({
   onTypingChange,
   userSpeaking,
   quickReplies,
+  soloView = false,
 }: ActiveCallPanelProps) {
   const [inputText, setInputText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -204,13 +210,14 @@ export function ActiveCallPanel({
           />
         </div>
 
-        {/* Camera feed from kiosk: 券面カメラ */}
+        {/* Camera feed from kiosk: 券面カメラ。
+            1件だけ対応しているときは券面の文字が読み取りやすいよう倍の大きさで出す。 */}
         {userCameraFaceFrame && (
-          <div className="w-56 border-l border-gray-100 p-2 shrink-0 flex flex-col gap-2 overflow-y-auto">
+          <div className={`border-l border-gray-100 p-2 shrink-0 flex flex-col gap-2 overflow-y-auto ${soloView ? "w-[28rem]" : "w-56"}`}>
             <ScreenShareView
               frameData={userCameraFaceFrame}
               label="券面カメラ"
-              className="h-40 shrink-0"
+              className={`shrink-0 ${soloView ? "h-80" : "h-40"}`}
             />
           </div>
         )}

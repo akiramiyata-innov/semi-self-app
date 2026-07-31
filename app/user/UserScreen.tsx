@@ -27,16 +27,51 @@ const ERR: Record<string, { noStaff: string; noStaffSub: string; disconnected: s
   th: { noStaff: "ไม่มีเจ้าหน้าที่", noStaffSub: "กรุณาลองใหม่ภายหลัง", disconnected: "การเชื่อมต่อขาดหาย", disconnectedSub: "กรุณาตรวจสอบเครือข่ายและลองใหม่", staffDisconnected: "การเชื่อมต่อกับเจ้าหน้าที่ขาดหาย", staffDisconnectedSub: "กรุณาโทรหาอีกครั้ง", serverDown: "ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้" },
 };
 
-// お客様の不安（伝わったのか／対応中なのか分からない）を解消する2つの表示の文言。
-const STATUS_TEXT: Record<string, { delivered: string; composing: string }> = {
-  ja: { delivered: "係員に伝わりました", composing: "係員が回答を準備しています" },
-  en: { delivered: "Delivered to staff", composing: "Staff is preparing a reply" },
-  zh: { delivered: "已送达工作人员", composing: "工作人员正在准备回复" },
-  "zh-TW": { delivered: "已送達服務人員", composing: "服務人員正在準備回覆" },
-  ko: { delivered: "담당자에게 전달되었습니다", composing: "담당자가 답변을 준비하고 있습니다" },
-  fr: { delivered: "Transmis à l'agent", composing: "L'agent prépare une réponse" },
-  es: { delivered: "Enviado al personal", composing: "El personal está preparando una respuesta" },
-  th: { delivered: "ส่งถึงเจ้าหน้าที่แล้ว", composing: "เจ้าหน้าที่กำลังเตรียมคำตอบ" },
+// 通話中の画面に出す文言。お客様が選んだ言語で表示する（日本語は翻訳が入らないので
+// 注釈も「文字起こし」だけにする）。訳文は日本語へ訳し戻して意味を確認済み。
+const UI_TEXT: Record<string, {
+  delivered: string; composing: string; heading: string; cancel: string; notice: string;
+}> = {
+  ja: {
+    delivered: "係員に伝わりました", composing: "係員が回答を準備しています",
+    heading: "ご用件をお伺いします。", cancel: "キャンセル",
+    notice: "AIで自動文字起こしをしています。",
+  },
+  en: {
+    delivered: "Delivered to staff", composing: "Staff is preparing a reply",
+    heading: "How may we help you?", cancel: "Cancel",
+    notice: "Speech is transcribed and translated automatically by AI.",
+  },
+  zh: {
+    delivered: "已送达工作人员", composing: "工作人员正在准备回复",
+    heading: "请问有什么可以帮您？", cancel: "取消",
+    notice: "语音由AI自动转写并翻译。",
+  },
+  "zh-TW": {
+    delivered: "已送達服務人員", composing: "服務人員正在準備回覆",
+    heading: "請問有什麼可以為您服務？", cancel: "取消",
+    notice: "語音由AI自動轉寫並翻譯。",
+  },
+  ko: {
+    delivered: "담당자에게 전달되었습니다", composing: "담당자가 답변을 준비하고 있습니다",
+    heading: "무엇을 도와드릴까요?", cancel: "취소",
+    notice: "음성은 AI가 자동으로 텍스트로 변환하고 번역합니다.",
+  },
+  fr: {
+    delivered: "Transmis à l'agent", composing: "L'agent prépare une réponse",
+    heading: "Comment pouvons-nous vous aider ?", cancel: "Annuler",
+    notice: "La parole est transcrite et traduite automatiquement par IA.",
+  },
+  es: {
+    delivered: "Enviado al personal", composing: "El personal está preparando una respuesta",
+    heading: "¿En qué podemos ayudarle?", cancel: "Cancelar",
+    notice: "El habla se transcribe y traduce automáticamente mediante IA.",
+  },
+  th: {
+    delivered: "ส่งถึงเจ้าหน้าที่แล้ว", composing: "เจ้าหน้าที่กำลังเตรียมคำตอบ",
+    heading: "มีอะไรให้เราช่วยเหลือไหม", cancel: "ยกเลิก",
+    notice: "ระบบ AI จะถอดเสียงและแปลโดยอัตโนมัติ",
+  },
 };
 
 /** 係員から解除通知が届かない場合でも「準備しています」が残り続けないようにする保険。 */
@@ -487,7 +522,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   useEffect(() => () => { if (avatarTailRef.current) clearTimeout(avatarTailRef.current); }, []);
 
   const errMsg = ERR[userLang] ?? ERR.ja;
-  const statusText = STATUS_TEXT[userLang] ?? STATUS_TEXT.ja;
+  const ui = UI_TEXT[userLang] ?? UI_TEXT.ja;
 
   // --- No Staff ---
   if (phase === "no-staff") {
@@ -642,8 +677,10 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       {/* 見出し（下に全幅の区切り線） */}
       <div className="shrink-0 px-28 pt-8 pb-6 border-b border-[#7fd0e4]">
         <h1 className="text-[44px] leading-none font-bold text-gray-900">
-          ご用件をお伺いします。
+          {ui.heading}
         </h1>
+        {/* AIが自動で文字起こし（外国語では翻訳も）していることを明示する。 */}
+        <p className="mt-3 text-lg text-gray-500">{ui.notice}</p>
       </div>
 
       <div className="flex-1 flex overflow-hidden">
@@ -666,7 +703,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
               {entry.speaker === "user" && deliveredIds.includes(entry.id) && (
                 <p className="mt-1.5 ml-2 flex items-center gap-1.5 text-lg text-gray-500">
                   <Check size={20} strokeWidth={3} className="text-emerald-600" />
-                  {statusText.delivered}
+                  {ui.delivered}
                 </p>
               )}
             </div>
@@ -686,7 +723,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
                 <span className="w-2.5 h-2.5 rounded-full bg-sky-500 animate-bounce [animation-delay:-0.15s]" />
                 <span className="w-2.5 h-2.5 rounded-full bg-sky-500 animate-bounce" />
               </span>
-              <span className="text-2xl text-gray-600">{statusText.composing}</span>
+              <span className="text-2xl text-gray-600">{ui.composing}</span>
             </div>
           )}
 
@@ -703,7 +740,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             <span className="flex items-center justify-center w-14 h-14 rounded-full bg-[#8b5cf6] shrink-0">
               <X size={30} strokeWidth={3} className="text-white" />
             </span>
-            キャンセル
+            {ui.cancel}
           </button>
 
           <button
