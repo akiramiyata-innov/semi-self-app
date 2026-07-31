@@ -34,6 +34,8 @@ interface ActiveSession {
   isCapturing: boolean;
   /** お客様が今話しているか（音量で判定。確定テキストが出るまで点灯し続ける）。 */
   userSpeaking: boolean;
+  /** お客様の画面に会話のテキストが出ているか（既定は非表示）。係員側からも切り替えられる。 */
+  textVisible: boolean;
 }
 
 // Kiosk machines available for demo
@@ -505,6 +507,12 @@ export default function StaffPage() {
       updateSession(payload.sessionId, { userLang: payload.lang });
     });
 
+    // お客様画面のテキスト表示ON/OFF。お客様側・係員側のどちらが押しても、
+    // サーバーが決めた状態がここへ届く（後から操作したほうが勝つ）。
+    s.on("session:textVisible", (payload: { sessionId: string; visible: boolean }) => {
+      updateSession(payload.sessionId, { textVisible: !!payload.visible });
+    });
+
     // 自分（係員）の発話の訳文が返ってきたら、先に表示した吹き出しに書き足す。
     // 送った日本語と、お客様に届いた外国語の両方を係員が確認できるようにするため。
     s.on(
@@ -588,6 +596,7 @@ export default function StaffPage() {
       isListening: false,
       isCapturing: false,
       userSpeaking: false,
+      textVisible: false, // 既定は非表示。サーバー側の初期値と合わせる
     }]]));
   }, [previewFaceFrames]);
 
@@ -658,6 +667,16 @@ export default function StaffPage() {
   }, [listening, activeListeningId, setComposing]);
   const setComposingRef = useRef(setComposing);
   useEffect(() => { setComposingRef.current = setComposing; }, [setComposing]);
+  // お客様画面のテキスト表示を係員側から切り替える。お客様側の操作と対等で、
+  // 後から操作したほうが勝つ（最終的な状態はサーバーからの通知で上書きされる）。
+  const toggleTextVisible = useCallback((sessionId: string) => {
+    const session = activeSessions.get(sessionId);
+    if (!session) return;
+    const visible = !session.textVisible;
+    socketRef.current?.emit("session:setTextVisible", { sessionId, visible });
+    updateSession(sessionId, { textVisible: visible }); // 押した手応えのため先に反映
+  }, [activeSessions, updateSession]);
+
   const justSentRef = useRef(false); // 直前の入力欄クリアが「送信」によるものか
   const handleTypingChange = useCallback((sessionId: string, typing: boolean) => {
     typingSidRef.current = typing ? sessionId : null;
@@ -1227,6 +1246,8 @@ export default function StaffPage() {
                   micError={micError}
                   quickReplies={quickReplies}
                   soloView={sessions.length === 1}
+                  textVisible={session.textVisible}
+                  onToggleText={() => toggleTextVisible(session.sessionId)}
                   onToggleMic={() => toggleMic(session.sessionId)}
                   onToggleScreenShare={() => toggleScreenShare(session.sessionId)}
                   onEnd={() => endSession(session.sessionId)}

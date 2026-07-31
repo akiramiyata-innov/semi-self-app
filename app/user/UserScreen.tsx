@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
-import { PhoneCall, PhoneOff, Mic, X, Check } from "lucide-react";
+import { PhoneCall, PhoneOff, Mic, X, Check, MessageSquareText, MessageSquareOff } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { KioskHeader } from "@/components/KioskHeader";
 import { ScreenShareView } from "@/components/ScreenShareView";
@@ -35,78 +35,88 @@ const UI_TEXT: Record<string, {
   // 通話中の言語変更まわり。langLocked はマイクON中に変更しようとしたときの説明、
   // confirmQ / confirmYes は「変更後の言語」で表示する確認ダイアログの文言。
   langChange: string; langPick: string; langLocked: string; confirmQ: string; confirmYes: string;
+  // 会話のテキスト表示 ON/OFF。マイクと同じ「状態表示」に合わせ、外国語は英語表記。
+  textOn: string; textOff: string;
 }> = {
   ja: {
     delivered: "係員に伝わりました", composing: "係員が回答を準備しています",
     heading: "ご用件をお伺いします。", cancel: "キャンセル",
-    notice: "AIで自動文字起こしをしています。",
+    notice: "実際の係員との会話を、AIによる「音声発話」「翻訳」「メッセージ表示」等を用いて行います。",
     micOn: "マイクON", micOff: "マイクOFF",
     langChange: "言語を変える", langPick: "言語をお選びください",
     langLocked: "マイクをOFFにすると言語を変えられます",
     confirmQ: "この言語に変更しますか？", confirmYes: "変更する",
+    textOn: "メッセージ表示ON", textOff: "メッセージ表示OFF",
   },
   en: {
     delivered: "Delivered to staff", composing: "Staff is preparing a reply",
     heading: "How may we help you?", cancel: "Cancel",
-    notice: "Speech is transcribed and translated automatically by AI.",
+    notice: "You are talking with a real staff member. AI provides the spoken voice, the translation and the on-screen messages.",
     micOn: "Mic ON", micOff: "Mic OFF",
     langChange: "Change language", langPick: "Please select your language",
     langLocked: "Turn the mic off to change the language",
     confirmQ: "Change to this language?", confirmYes: "Change",
+    textOn: "Text ON", textOff: "Text OFF",
   },
   zh: {
     delivered: "已送达工作人员", composing: "工作人员正在准备回复",
     heading: "请问有什么可以帮您？", cancel: "Cancel",
-    notice: "语音由AI自动转写并翻译。",
+    notice: "您正在与真人工作人员对话。语音播报、翻译、消息显示等由AI提供。",
     micOn: "Mic ON", micOff: "Mic OFF",
     langChange: "更改语言", langPick: "请选择语言",
     langLocked: "请先关闭麦克风再更改语言",
     confirmQ: "要更改为该语言吗？", confirmYes: "更改",
+    textOn: "Text ON", textOff: "Text OFF",
   },
   "zh-TW": {
     delivered: "已送達服務人員", composing: "服務人員正在準備回覆",
     heading: "請問有什麼可以為您服務？", cancel: "Cancel",
-    notice: "語音由AI自動轉寫並翻譯。",
+    notice: "您正在與真人服務人員對話。語音播報、翻譯、訊息顯示等由AI提供。",
     micOn: "Mic ON", micOff: "Mic OFF",
     langChange: "變更語言", langPick: "請選擇語言",
     langLocked: "請先關閉麥克風再變更語言",
     confirmQ: "要變更為此語言嗎？", confirmYes: "變更",
+    textOn: "Text ON", textOff: "Text OFF",
   },
   ko: {
     delivered: "담당자에게 전달되었습니다", composing: "담당자가 답변을 준비하고 있습니다",
     heading: "무엇을 도와드릴까요?", cancel: "Cancel",
-    notice: "음성은 AI가 자동으로 텍스트로 변환하고 번역합니다.",
+    notice: "실제 담당자와 대화하고 있습니다. 음성 발화, 번역, 메시지 표시 등은 AI가 제공합니다.",
     micOn: "Mic ON", micOff: "Mic OFF",
     langChange: "언어 변경", langPick: "언어를 선택해 주세요",
     langLocked: "마이크를 끄면 언어를 변경할 수 있습니다",
     confirmQ: "이 언어로 변경하시겠습니까?", confirmYes: "변경",
+    textOn: "Text ON", textOff: "Text OFF",
   },
   fr: {
     delivered: "Transmis à l'agent", composing: "L'agent prépare une réponse",
     heading: "Comment pouvons-nous vous aider ?", cancel: "Cancel",
-    notice: "La parole est transcrite et traduite automatiquement par IA.",
+    notice: "Vous parlez avec un agent réel. L'IA fournit la voix, la traduction et l'affichage des messages.",
     micOn: "Mic ON", micOff: "Mic OFF",
     langChange: "Changer de langue", langPick: "Veuillez choisir votre langue",
     langLocked: "Désactivez le micro pour changer de langue",
     confirmQ: "Changer pour cette langue ?", confirmYes: "Changer",
+    textOn: "Text ON", textOff: "Text OFF",
   },
   es: {
     delivered: "Enviado al personal", composing: "El personal está preparando una respuesta",
     heading: "¿En qué podemos ayudarle?", cancel: "Cancel",
-    notice: "El habla se transcribe y traduce automáticamente mediante IA.",
+    notice: "Está hablando con un agente real. La IA proporciona la voz, la traducción y la visualización de mensajes.",
     micOn: "Mic ON", micOff: "Mic OFF",
     langChange: "Cambiar idioma", langPick: "Seleccione su idioma",
     langLocked: "Desactive el micrófono para cambiar de idioma",
     confirmQ: "¿Cambiar a este idioma?", confirmYes: "Cambiar",
+    textOn: "Text ON", textOff: "Text OFF",
   },
   th: {
     delivered: "ส่งถึงเจ้าหน้าที่แล้ว", composing: "เจ้าหน้าที่กำลังเตรียมคำตอบ",
     heading: "มีอะไรให้เราช่วยเหลือไหม", cancel: "Cancel",
-    notice: "ระบบ AI จะถอดเสียงและแปลโดยอัตโนมัติ",
+    notice: "คุณกำลังสนทนากับเจ้าหน้าที่จริง โดยใช้ AI ในการอ่านออกเสียง การแปล และการแสดงข้อความ",
     micOn: "Mic ON", micOff: "Mic OFF",
     langChange: "เปลี่ยนภาษา", langPick: "กรุณาเลือกภาษา",
     langLocked: "ปิดไมโครโฟนเพื่อเปลี่ยนภาษา",
     confirmQ: "ต้องการเปลี่ยนเป็นภาษานี้หรือไม่", confirmYes: "เปลี่ยน",
+    textOn: "Text ON", textOff: "Text OFF",
   },
 };
 
@@ -175,6 +185,9 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   // 通話中の言語変更。パネルを開いてから言語を選び、確認してはじめて切り替わる。
   const [langPanelOpen, setLangPanelOpen] = useState(false);
   const [pendingLang, setPendingLang] = useState<LangCode | null>(null);
+  // 会話のテキストを画面に出すか。**既定は非表示**。お客様側・係員側のどちらからでも
+  // 切り替えられ、状態はサーバーが持つ（後から操作したほうが勝つ）。
+  const [textVisible, setTextVisible] = useState(false);
   const [showConnectWarning, setShowConnectWarning] = useState(false);
   const [deliveredIds, setDeliveredIds] = useState<string[]>([]); // 係員に届いた発言のid
   const [staffComposing, setStaffComposing] = useState(false);    // 係員が回答を準備中
@@ -347,6 +360,15 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     setPendingLang(null);
   }, []);
 
+  // 会話のテキスト表示を切り替える。押した手応えのため画面には先に反映し、
+  // 最終的な状態はサーバーから届く通知で上書きする（係員と同時に押した場合の整合）。
+  const toggleTextVisible = useCallback(() => {
+    const next = !textVisible;
+    setTextVisible(next);
+    const sid = sessionIdRef.current;
+    if (sid) socketRef.current?.emit("session:setTextVisible", { sessionId: sid, visible: next });
+  }, [textVisible]);
+
   // Track the most recent text the avatar spoke — used to filter echo
   const lastAvatarTextRef = useRef<string>("");
 
@@ -435,6 +457,10 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     setLatestAudio(undefined);
     setDeliveredIds([]);
     setStaffComposing(false);
+    // テキスト表示は通話ごとに既定（非表示）へ戻す。前のお客様の設定を引き継がない。
+    setTextVisible(false);
+    setLangPanelOpen(false);
+    setPendingLang(null);
   }, [stopMic]);
 
   // Socket.IO setup
@@ -512,6 +538,12 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     // 係員がマイクON／入力中＝回答を準備している
     s.on("staff:composing", (payload: { active: boolean }) => {
       setStaffComposing(!!payload.active);
+    });
+
+    // テキスト表示の切り替え。お客様側・係員側のどちらが押しても、サーバーが決めた
+    // 状態がここへ届く。後から操作したほうが必ず勝つ。
+    s.on("session:textVisible", (payload: { visible: boolean }) => {
+      setTextVisible(!!payload.visible);
     });
 
     s.on("speech:staff", (payload: { text: string; isFinal: boolean }) => {
@@ -592,6 +624,9 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   // 言語変更の確認ダイアログは「変更後の言語」で出すため、その言語の設定と文言を先に引く。
   const pendingLangConfig = pendingLang ? SUPPORTED_LANGS.find((l) => l.code === pendingLang) : undefined;
   const pendingUi = pendingLang ? (UI_TEXT[pendingLang] ?? UI_TEXT.ja) : undefined;
+  // テキスト非表示のとき、直前のお客様の発言が係員に届いたか（単独表示の判定に使う）。
+  const lastEntry = transcript[transcript.length - 1];
+  const lastEntryDelivered = lastEntry?.speaker === "user" && deliveredIds.includes(lastEntry.id);
 
   // --- No Staff ---
   if (phase === "no-staff") {
@@ -755,30 +790,42 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       <div className="flex-1 flex overflow-hidden">
       {/* LEFT: chat + controls */}
       <div className="flex flex-col w-[58%] px-28 pt-6 pb-8 overflow-hidden">
-        {/* Chat bubbles */}
+        {/* Chat bubbles。テキスト表示がOFFのときは会話の文字だけを出さない。
+            「係員に伝わりました」「係員が回答を準備しています」は状況を伝える表示
+            なので、音声をテキスト化したものではなく、OFFでも残す。 */}
         <div className="flex-1 overflow-y-auto flex flex-col gap-4 pr-1">
-          {transcript.map((entry) => (
-            <div key={entry.id} className="max-w-[90%]">
-              <div
-                className={`rounded-3xl px-7 py-4 text-2xl font-medium leading-snug shadow-sm ${
-                  entry.speaker === "user"
-                    ? "bg-amber-300 text-gray-900"
-                    : "bg-sky-200 text-gray-900"
-                }`}
-              >
-                {entry.text}
+          {textVisible &&
+            transcript.map((entry) => (
+              <div key={entry.id} className="max-w-[90%]">
+                <div
+                  className={`rounded-3xl px-7 py-4 text-2xl font-medium leading-snug shadow-sm ${
+                    entry.speaker === "user"
+                      ? "bg-amber-300 text-gray-900"
+                      : "bg-sky-200 text-gray-900"
+                  }`}
+                >
+                  {entry.text}
+                </div>
+                {/* 係員の画面に届いた合図。待っている間の「伝わったのか」という不安に応える。 */}
+                {entry.speaker === "user" && deliveredIds.includes(entry.id) && (
+                  <p className="mt-1.5 ml-2 flex items-center gap-1.5 text-lg text-gray-500">
+                    <Check size={20} strokeWidth={3} className="text-emerald-600" />
+                    {ui.delivered}
+                  </p>
+                )}
               </div>
-              {/* 係員の画面に届いた合図。待っている間の「伝わったのか」という不安に応える。 */}
-              {entry.speaker === "user" && deliveredIds.includes(entry.id) && (
-                <p className="mt-1.5 ml-2 flex items-center gap-1.5 text-lg text-gray-500">
-                  <Check size={20} strokeWidth={3} className="text-emerald-600" />
-                  {ui.delivered}
-                </p>
-              )}
-            </div>
-          ))}
+            ))}
 
-          {interimStaff && (
+          {/* テキスト非表示のときは吹き出しがないので、「伝わりました」を単独で出す
+              （直前の発言が届いたときだけ）。 */}
+          {!textVisible && lastEntryDelivered && (
+            <p className="flex items-center gap-1.5 text-lg text-gray-500">
+              <Check size={20} strokeWidth={3} className="text-emerald-600" />
+              {ui.delivered}
+            </p>
+          )}
+
+          {textVisible && interimStaff && (
             <div className="rounded-3xl px-7 py-4 text-2xl text-gray-400 italic max-w-[90%] bg-sky-100 shadow-sm">
               {interimStaff}
             </div>
@@ -833,7 +880,8 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
               {listening ? (
                 <p className="leading-snug line-clamp-2">
                   <span className="text-3xl font-bold">{ui.micOn}</span>
-                  {interimUser && <span className="ml-3 text-xl text-gray-700">{interimUser}</span>}
+                  {/* 認識中の文字も「音声をテキスト化したもの」なので、非表示のときは出さない。 */}
+                  {textVisible && interimUser && <span className="ml-3 text-xl text-gray-700">{interimUser}</span>}
                 </p>
               ) : micError ? (
                 <p className="text-base text-red-500">{micError}</p>
@@ -865,10 +913,30 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
           />
         </div>
 
-        {/* 言語の選び直し。アバターの下に置く。マイクON中は認識中の音声を取りこぼす
-            ため変更させず、押されたら理由を説明する（無反応にすると壊れていると
-            思われるため）。 */}
-        <div className="shrink-0 flex justify-center pb-8">
+        {/* アバターの下の設定ボタン。左＝会話のテキスト表示ON/OFF、右＝言語の選び直し。
+            言語のほうはマイクON中は認識中の音声を取りこぼすため変更させず、押されたら
+            理由を説明する（無反応にすると壊れていると思われるため）。 */}
+        <div className="shrink-0 flex justify-center items-center gap-4 pb-8">
+          <button
+            onClick={toggleTextVisible}
+            className={`flex items-center gap-3 py-2 pl-2 pr-7 rounded-full shadow-lg ring-[6px] ring-white/80 active:scale-95 transition-all ${
+              textVisible ? "bg-sky-100 hover:bg-sky-200" : "bg-white hover:bg-gray-50"
+            }`}
+          >
+            <span
+              className={`w-14 h-14 rounded-full flex items-center justify-center shrink-0 transition-colors ${
+                textVisible ? "bg-sky-500" : "bg-gray-400"
+              }`}
+            >
+              {textVisible
+                ? <MessageSquareText size={28} strokeWidth={2.5} className="text-white" />
+                : <MessageSquareOff size={28} strokeWidth={2.5} className="text-white" />}
+            </span>
+            <span className={`text-2xl font-bold ${textVisible ? "text-sky-800" : "text-gray-500"}`}>
+              {textVisible ? ui.textOn : ui.textOff}
+            </span>
+          </button>
+
           <button
             onClick={() => setLangPanelOpen(true)}
             className={`flex items-center gap-3 bg-white py-2 pl-2 pr-7 rounded-full shadow-lg ring-[6px] ring-white/80 active:scale-95 transition-all ${

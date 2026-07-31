@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Monitor, MonitorOff, Mic, MicOff, PhoneOff, Send } from "lucide-react";
+import { Monitor, MonitorOff, Mic, MicOff, PhoneOff, Send, MessageSquareText, MessageSquareOff } from "lucide-react";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { ScreenShareView } from "./ScreenShareView";
 import { SUPPORTED_LANGS } from "@/lib/languages";
@@ -35,6 +35,14 @@ interface ActiveCallPanelProps {
    * 複数通話で画面が分割されているときは場所が足りないので従来の大きさのままにする。
    */
   soloView?: boolean;
+  /**
+   * お客様の画面に会話のテキストが出ているか（既定は非表示）。係員の画面には常に
+   * テキストが出ているため、お客様にも見えている前提で話してしまわないよう、
+   * 状態をはっきり表示する。
+   */
+  textVisible?: boolean;
+  /** お客様画面のテキスト表示を切り替える。お客様側の操作と対等（後勝ち）。 */
+  onToggleText?: () => void;
 }
 
 export function ActiveCallPanel({
@@ -55,6 +63,8 @@ export function ActiveCallPanel({
   userSpeaking,
   quickReplies,
   soloView = false,
+  textVisible = false,
+  onToggleText,
 }: ActiveCallPanelProps) {
   const [inputText, setInputText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -141,6 +151,17 @@ export function ActiveCallPanel({
               録音中
             </span>
           )}
+
+          {/* お客様の画面にテキストが出ているか。係員の画面には常に出ているので、
+              見えている前提で「画面をご覧ください」と言ってしまわないための表示。 */}
+          <span
+            className={`flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${
+              textVisible ? "bg-sky-600 text-white" : "bg-gray-500 text-white"
+            }`}
+          >
+            {textVisible ? <MessageSquareText size={11} /> : <MessageSquareOff size={11} />}
+            {textVisible ? "お客様にテキスト表示中" : "お客様にはテキスト非表示"}
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -168,6 +189,18 @@ export function ActiveCallPanel({
           >
             {isCapturing ? <Monitor size={14} /> : <MonitorOff size={14} />}
             {isCapturing ? "共有停止" : "画面共有"}
+          </button>
+          <button
+            onClick={onToggleText}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              textVisible
+                ? "bg-sky-600 text-white hover:bg-sky-700"
+                : "bg-gray-200 text-gray-600 hover:bg-gray-300"
+            }`}
+            title={textVisible ? "お客様画面のテキスト表示をOFFにする" : "お客様画面にテキストを表示する"}
+          >
+            {textVisible ? <MessageSquareText size={14} /> : <MessageSquareOff size={14} />}
+            {textVisible ? "テキストON" : "テキストOFF"}
           </button>
           <button
             onClick={onEnd}

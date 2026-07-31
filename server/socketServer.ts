@@ -87,6 +87,12 @@ interface ActiveSession extends CallRecord {
   speakingTimer?: ReturnType<typeof setTimeout>;
   /** アバターが発話中か（キオスクのマイクが自分の声を拾うため、その間は発話中表示を止める）。 */
   avatarSpeaking?: boolean;
+  /**
+   * お客様の画面に会話のテキストを出しているか。**既定は非表示**（駅の券売機は人が
+   * 並ぶ場所で、文字は画面に残るため後ろから読まれやすい）。お客様側・係員側の
+   * どちらからでも切り替えられ、**後から操作したほうが必ず勝つ**。
+   */
+  textVisible: boolean;
 }
 
 /** 「お客様発話中」が確定テキストなしで残り続けないようにする上限。 */
@@ -625,6 +631,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         staffSocketId: socket.id,
         startedAt: Date.now(),
         transcript: [],
+        textVisible: false, // 既定は非表示。通話ごとに必ずこの状態から始まる
       };
       activeSessions.set(sessionId, session);
       socket.join(`session:${sessionId}`);
@@ -867,6 +874,24 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         lang: payload.lang,
       });
       console.log(`[lang] session=${payload.sessionId} → ${payload.lang}`);
+    });
+
+    // ── お客様画面のテキスト表示 ON/OFF ────────────────────────────────────────
+    // お客様側・係員側のどちらからでも操作でき、**後から操作したほうが必ず勝つ**。
+    // 状態はサーバーが1つだけ持ち、切り替わるたびに両方の画面へ同じ値を配ることで、
+    // 二人が同時に押しても最終的に必ず同じ表示になる。
+    socket.on("session:setTextVisible", (payload: { sessionId: string; visible: boolean }) => {
+      const session = activeSessions.get(payload.sessionId);
+      if (!session) return;
+      // この通話の当事者（お客様のキオスク or 担当係員）以外は操作できない。
+      if (session.userSocketId !== socket.id && session.staffSocketId !== socket.id) return;
+      const visible = !!payload.visible;
+      if (session.textVisible === visible) return;
+      session.textVisible = visible;
+      const update = { sessionId: payload.sessionId, visible };
+      io.to(session.userSocketId).emit("session:textVisible", update);
+      io.to(session.staffSocketId).emit("session:textVisible", update);
+      console.log(`[text] session=${payload.sessionId} → ${visible ? "表示" : "非表示"}`);
     });
 
     // ── Disconnect cleanup ────────────────────────────────────────────────────
