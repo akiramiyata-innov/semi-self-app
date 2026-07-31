@@ -240,8 +240,10 @@ export function Avatar({
           />
         ))}
       </div>
+      {/* 話していないときは何も出さない（以前の「お気軽にどうぞ」は外国語のお客様には
+          読めないため削除した）。 */}
       <div className="text-center shrink-0">
-        {speaking ? (
+        {speaking && (
           <span className="inline-flex items-center gap-1.5 text-sm text-blue-600 font-medium">
             <span className="relative flex h-2.5 w-2.5">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
@@ -249,8 +251,6 @@ export function Avatar({
             </span>
             お話し中...
           </span>
-        ) : (
-          <span className="text-sm text-gray-400">お気軽にどうぞ</span>
         )}
       </div>
     </div>

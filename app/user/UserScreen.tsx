@@ -31,46 +31,55 @@ const ERR: Record<string, { noStaff: string; noStaffSub: string; disconnected: s
 // 注釈も「文字起こし」だけにする）。訳文は日本語へ訳し戻して意味を確認済み。
 const UI_TEXT: Record<string, {
   delivered: string; composing: string; heading: string; cancel: string; notice: string;
+  micOn: string; micOff: string; spaceHint: string;
 }> = {
   ja: {
     delivered: "係員に伝わりました", composing: "係員が回答を準備しています",
     heading: "ご用件をお伺いします。", cancel: "キャンセル",
     notice: "AIで自動文字起こしをしています。",
+    micOn: "マイクON", micOff: "マイクOFF", spaceHint: "[スペースキー]",
   },
   en: {
     delivered: "Delivered to staff", composing: "Staff is preparing a reply",
     heading: "How may we help you?", cancel: "Cancel",
     notice: "Speech is transcribed and translated automatically by AI.",
+    micOn: "Mic ON", micOff: "Mic OFF", spaceHint: "[Space]",
   },
   zh: {
     delivered: "已送达工作人员", composing: "工作人员正在准备回复",
     heading: "请问有什么可以帮您？", cancel: "取消",
     notice: "语音由AI自动转写并翻译。",
+    micOn: "Mic ON", micOff: "Mic OFF", spaceHint: "[Space]",
   },
   "zh-TW": {
     delivered: "已送達服務人員", composing: "服務人員正在準備回覆",
     heading: "請問有什麼可以為您服務？", cancel: "取消",
     notice: "語音由AI自動轉寫並翻譯。",
+    micOn: "Mic ON", micOff: "Mic OFF", spaceHint: "[Space]",
   },
   ko: {
     delivered: "담당자에게 전달되었습니다", composing: "담당자가 답변을 준비하고 있습니다",
     heading: "무엇을 도와드릴까요?", cancel: "취소",
     notice: "음성은 AI가 자동으로 텍스트로 변환하고 번역합니다.",
+    micOn: "Mic ON", micOff: "Mic OFF", spaceHint: "[Space]",
   },
   fr: {
     delivered: "Transmis à l'agent", composing: "L'agent prépare une réponse",
     heading: "Comment pouvons-nous vous aider ?", cancel: "Annuler",
     notice: "La parole est transcrite et traduite automatiquement par IA.",
+    micOn: "Mic ON", micOff: "Mic OFF", spaceHint: "[Space]",
   },
   es: {
     delivered: "Enviado al personal", composing: "El personal está preparando una respuesta",
     heading: "¿En qué podemos ayudarle?", cancel: "Cancelar",
     notice: "El habla se transcribe y traduce automáticamente mediante IA.",
+    micOn: "Mic ON", micOff: "Mic OFF", spaceHint: "[Space]",
   },
   th: {
     delivered: "ส่งถึงเจ้าหน้าที่แล้ว", composing: "เจ้าหน้าที่กำลังเตรียมคำตอบ",
     heading: "มีอะไรให้เราช่วยเหลือไหม", cancel: "ยกเลิก",
     notice: "ระบบ AI จะถอดเสียงและแปลโดยอัตโนมัติ",
+    micOn: "Mic ON", micOff: "Mic OFF", spaceHint: "[Space]",
   },
 };
 
@@ -760,15 +769,15 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             <div className="flex-1 overflow-hidden">
               {listening ? (
                 <p className="text-lg text-gray-700 leading-relaxed line-clamp-2">
-                  <span className="font-semibold">Listening...</span>
+                  <span className="font-semibold">{ui.micOn}</span>
                   {interimUser && <span className="ml-2 text-gray-500">{interimUser}</span>}
                 </p>
               ) : micError ? (
                 <p className="text-base text-red-500">{micError}</p>
               ) : (
                 <p className="text-gray-400 text-lg">
-                  タップしてマイクをON
-                  <span className="ml-2 text-sm opacity-60">[スペースキー]</span>
+                  {ui.micOff}
+                  <span className="ml-2 text-sm opacity-60">{ui.spaceHint}</span>
                 </p>
               )}
             </div>
