@@ -9,6 +9,7 @@ import { ActiveCallPanel } from "@/components/ActiveCallPanel";
 import { Toast } from "@/components/Toast";
 import type { ToastItem } from "@/components/Toast";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
+import type { MicErrorCode } from "@/hooks/useSpeechRecognition";
 import { useScreenCapture } from "@/hooks/useScreenCapture";
 import type { TranscriptEntry } from "@/lib/types";
 import type { LangCode, StaffStatus, StaffInfo } from "@/lib/socketEvents";
@@ -20,6 +21,27 @@ interface IncomingCall {
   userLang: LangCode;
   timestamp: number;
 }
+
+// マイク／音声認識のエラー文言（係員向け・日本語）。フックはコードだけを返すので、
+// 画面ごとに言語を割り当てる。係員はブラウザ設定を直せるため手順まで書く。
+const MIC_ERR_JA: Record<MicErrorCode, string> = {
+  "mic-denied": "マイクへのアクセスが拒否されました。\nアドレスバー左端のアイコン →「マイク」→「許可」に変更し、ページをリロードしてください。",
+  "mic-not-found": "マイクが見つかりません。マイクの接続を確認してください。",
+  "network": "ネットワークエラー: 音声認識にはインターネット接続が必要です。",
+  "service-unavailable": "音声認識サービスを利用できません。\nインターネット接続を確認するか、Chromeのアドレスバー左端のアイコンから「マイク」と「音声」を許可してください。",
+  "no-connection": "サーバーに接続できていません。少し待って再度お試しください。",
+  "unknown": "音声認識エラーが発生しました。",
+};
+
+/** お客様側のマイク異常を係員に見せるための文言（原因は端末側なので手順は書かない）。 */
+const USER_MIC_ERR_JA: Record<MicErrorCode, string> = {
+  "mic-denied": "お客様の端末でマイクが許可されていません",
+  "mic-not-found": "お客様の端末でマイクが見つかりません",
+  "network": "お客様側の通信が不安定です",
+  "service-unavailable": "お客様側で音声認識を利用できません",
+  "no-connection": "お客様がサーバーに接続できていません",
+  "unknown": "お客様側で音声認識のエラーが発生しています",
+};
 
 interface ActiveSession {
   sessionId: string;
@@ -36,6 +58,8 @@ interface ActiveSession {
   userSpeaking: boolean;
   /** お客様の画面に会話のテキストが出ているか（既定は非表示）。係員側からも切り替えられる。 */
   textVisible: boolean;
+  /** お客様側のマイク異常（null＝異常なし）。係員が原因を切り分けられるようにする。 */
+  userMicError: MicErrorCode | null;
 }
 
 // Kiosk machines available for demo
@@ -308,7 +332,7 @@ export default function StaffPage() {
   }, []);
 
   // ── Speech Recognition ───────────────────────────────────────────────────
-  const { start: startMic, stop: stopMic, listening, error: micError, manualStop } = useSpeechRecognition({
+  const { start: startMic, stop: stopMic, listening, error: micError, errorDetail: micErrorDetail, manualStop } = useSpeechRecognition({
     lang: "ja-JP",
     getSocket: () => socketRef.current,
     // Edge/streaming: 無音でOFFしたとき onFinal は発火しない → onStop で必ずセッションをクリア
@@ -440,6 +464,11 @@ export default function StaffPage() {
       // (see the activeSessions.size effect) and is confirmed by staff:list.
     });
 
+    // 通話ログの保存に失敗した。放置すると性能テストの記録が黙って欠ける。
+    s.on("error:logSave", (payload: { sessionId: string }) => {
+      addToast(`通話ログの保存に失敗しました（セッション ${payload.sessionId}）。管理者へご連絡ください。`, "error");
+    });
+
     // S1: user's connection dropped unexpectedly
     s.on("call:userDisconnected", (payload: { sessionId: string; machineName: string }) => {
       addToast(`${payload.machineName}のユーザーとの接続が切れました`, "error");
@@ -447,8 +476,23 @@ export default function StaffPage() {
 
     // 音声合成に失敗した。係員の画面には自分の発言が普通に出るため、知らせないと
     // 「伝わった」と思ったまま進んでしまう。お客様側には文字だけ出している。
-    s.on("error:tts", (payload: { sessionId: string; partial: boolean }) => {
-      const msg = payload.partial
+    s.on("error:tts", (payload: { sessionId: string; partial: boolean; reason?: string }) => {
+      if (payload.reason === "playback") {
+        // 返信を送った後に届くので、直近の自分の発言に印をつける。
+        setActiveSessions((prev) => {
+          const next = new Map(prev);
+          const sess = next.get(payload.sessionId);
+          if (!sess) return prev;
+          const idx = [...sess.transcript].map((e) => e.speaker).lastIndexOf("staff");
+          if (idx < 0) return prev;
+          const transcript = sess.transcript.map((e, i) => (i === idx ? { ...e, voiceFailed: true } : e));
+          next.set(payload.sessionId, { ...sess, transcript });
+          return next;
+        });
+      }
+      const msg = payload.reason === "playback"
+        ? "お客様の端末で音声を再生できませんでした。お客様の画面には文字で表示しています。"
+        : payload.partial
         ? "音声を最後まで届けられませんでした（途中が抜けています）。お客様の画面には文字で表示しました。短く区切って言い直してください。"
         : "音声をお届けできませんでした。お客様の画面には文字で表示しました。短く区切って言い直してください。";
       addToast(msg, "error");
@@ -522,13 +566,19 @@ export default function StaffPage() {
       updateSession(payload.sessionId, { textVisible: !!payload.visible });
     });
 
+    // お客様側のマイク異常。係員からは「話さないお客様」にしか見えないため知らせる。
+    s.on("user:micError", (payload: { sessionId: string; code: MicErrorCode | null }) => {
+      updateSession(payload.sessionId, { userMicError: payload.code });
+      if (payload.code) addToast(USER_MIC_ERR_JA[payload.code], "error");
+    });
+
     // 自分（係員）の発話の訳文が返ってきたら、先に表示した吹き出しに書き足す。
     // 送った日本語と、お客様に届いた外国語の両方を係員が確認できるようにするため。
     s.on(
       "speech:staff",
-      (payload: { sessionId: string; isFinal: boolean; clientId?: string; translatedText?: string }) => {
-        const { sessionId, isFinal, clientId, translatedText } = payload;
-        if (!isFinal || !clientId || !translatedText) return;
+      (payload: { sessionId: string; isFinal: boolean; clientId?: string; translatedText?: string; translationFailed?: boolean; voiceFailed?: boolean }) => {
+        const { sessionId, isFinal, clientId, translatedText, translationFailed, voiceFailed } = payload;
+        if (!isFinal || !clientId) return;
         setActiveSessions((prev) => {
           const next = new Map(prev);
           const session = next.get(sessionId);
@@ -536,7 +586,9 @@ export default function StaffPage() {
           next.set(sessionId, {
             ...session,
             transcript: session.transcript.map((e) =>
-              e.id === clientId ? { ...e, translatedText } : e),
+              e.id === clientId
+                ? { ...e, ...(translatedText ? { translatedText } : {}), translationFailed, voiceFailed }
+                : e),
           });
           return next;
         });
@@ -545,8 +597,8 @@ export default function StaffPage() {
 
     s.on(
       "speech:user",
-      (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean; translatedText?: string }) => {
-        const { sessionId, text, translatedText, isFinal } = payload;
+      (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean; translatedText?: string; translationFailed?: boolean }) => {
+        const { sessionId, text, translatedText, isFinal, translationFailed } = payload;
         if (!isFinal) {
           updateSession(sessionId, { interimUserText: text });
           return;
@@ -560,7 +612,7 @@ export default function StaffPage() {
               interimUserText: "",
               transcript: [
                 ...session.transcript,
-                { id: makeId(), speaker: "user", text, translatedText, isFinal: true, timestamp: Date.now() },
+                { id: makeId(), speaker: "user", text, translatedText, isFinal: true, timestamp: Date.now(), translationFailed },
               ],
             });
           }
@@ -606,6 +658,7 @@ export default function StaffPage() {
       isCapturing: false,
       userSpeaking: false,
       textVisible: false, // 既定は非表示。サーバー側の初期値と合わせる
+      userMicError: null,
     }]]));
   }, [previewFaceFrames]);
 
@@ -1045,7 +1098,7 @@ export default function StaffPage() {
 
         {micError && (
           <div className="mt-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg text-red-700 text-xs whitespace-pre-line">
-            ⚠️ {micError}
+            ⚠️ {MIC_ERR_JA[micError]}{micErrorDetail ? `（${micErrorDetail}）` : ""}
           </div>
         )}
 
@@ -1252,10 +1305,11 @@ export default function StaffPage() {
                   userCameraFaceFrame={session.userCameraFaceFrame}
                   isListening={isListening}
                   isCapturing={capturing && captureSessionRef.current === session.sessionId}
-                  micError={micError}
+                  micError={micError ? MIC_ERR_JA[micError] : null}
                   quickReplies={quickReplies}
                   soloView={sessions.length === 1}
                   textVisible={session.textVisible}
+                  userMicError={session.userMicError ? USER_MIC_ERR_JA[session.userMicError] : null}
                   onToggleText={() => toggleTextVisible(session.sessionId)}
                   onToggleMic={() => toggleMic(session.sessionId)}
                   onToggleScreenShare={() => toggleScreenShare(session.sessionId)}

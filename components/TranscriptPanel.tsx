@@ -59,6 +59,22 @@ export function TranscriptPanel({ entries, interimUserText, interimStaffText, us
               {entry.translatedText}
             </div>
           )}
+          {/* 失敗の印。通知（トースト）は4秒で消えるため、発言そのものに残して
+              後から見返しても分かるようにする。 */}
+          {(entry.translationFailed || entry.voiceFailed) && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {entry.translationFailed && (
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">
+                  ⚠ 翻訳できませんでした
+                </span>
+              )}
+              {entry.voiceFailed && (
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">
+                  ⚠ 音声が届きませんでした
+                </span>
+              )}
+            </div>
+          )}
         </div>
       ))}
 

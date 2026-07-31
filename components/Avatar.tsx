@@ -7,6 +7,12 @@ interface AvatarProps {
   /** Google TTS audio (base64 MP3) for the staff's speech. */
   audioBase64?: string;
   onSpeakingChange?: (speaking: boolean) => void;
+  /**
+   * 音声を再生できなかったときに呼ばれる（デコード失敗・自動再生のブロック等）。
+   * サーバーは音声を送れているのでここでしか検知できず、放置するとお客様には音も
+   * 文字も届かない。親が文字の表示と係員への通知を行う。
+   */
+  onPlaybackError?: () => void;
   visible?: boolean;
   size?: "sm" | "md" | "lg" | "xl";
 }
@@ -62,6 +68,7 @@ function mouthForLevel(rms: number): MouthShape {
 export function Avatar({
   audioBase64,
   onSpeakingChange,
+  onPlaybackError,
   visible = true,
   size = "lg",
 }: AvatarProps) {
@@ -71,12 +78,14 @@ export function Avatar({
   // ends mid-sentence (otherwise the voice plays on after the screen closes).
   const sourceRef = useRef<AudioBufferSourceNode | null>(null);
   const onSpeakingRef = useRef(onSpeakingChange);
+  const onPlaybackErrorRef = useRef(onPlaybackError);
   // Drives the mouth while speaking. A timer, not requestAnimationFrame: rAF is
   // suspended whenever the page isn't painting, which freezes the mouth mid-word.
   const mouthTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const height = SIZE_MAP[size];
 
   useEffect(() => { onSpeakingRef.current = onSpeakingChange; }, [onSpeakingChange]);
+  useEffect(() => { onPlaybackErrorRef.current = onPlaybackError; }, [onPlaybackError]);
 
   useEffect(() => {
     if (visible) {
@@ -192,6 +201,8 @@ export function Avatar({
       })
       .catch((e) => {
         console.error("[avatar] audio decode/playback failed:", e);
+        // 音も文字も届かない状態を防ぐため、親に知らせる（文字表示＋係員への通知）。
+        onPlaybackErrorRef.current?.();
       });
   }, [audioBase64, playNext]);
 

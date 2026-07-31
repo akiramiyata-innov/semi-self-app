@@ -9,6 +9,7 @@ import { ScreenShareView } from "@/components/ScreenShareView";
 import { SUPPORTED_LANGS } from "@/lib/languages";
 import { unlockAudioContext } from "@/lib/audioUnlock";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
+import type { MicErrorCode } from "@/hooks/useSpeechRecognition";
 import { useScreenCapture } from "@/hooks/useScreenCapture";
 import type { TranscriptEntry } from "@/lib/types";
 import type { LangCode } from "@/lib/socketEvents";
@@ -127,6 +128,77 @@ const UI_TEXT: Record<string, {
     confirmQ: "ต้องการเปลี่ยนเป็นภาษานี้หรือไม่", confirmYes: "เปลี่ยน",
     textOn: "Text ON", textOff: "Text OFF",
     voiceFailed: "ไม่สามารถเล่นเสียงได้ กรุณาอ่านข้อความด้านบน",
+  },
+};
+
+// マイク／音声認識のエラー文言。フックはコードだけを返すので、お客様が選んだ言語で
+// ここで文章にする（従来は日本語がフック内に直接書かれており、外国語のお客様には
+// 読めなかった）。キオスクではお客様がブラウザ設定を直せないため、機器の問題は
+// 「係員が対応します」と伝え、係員側にも通知する（user:micError）。
+const MIC_ERR: Record<string, Record<MicErrorCode, string>> = {
+  ja: {
+    "mic-denied": "マイクを使用できません。係員が対応します。",
+    "mic-not-found": "マイクが見つかりません。係員が対応します。",
+    "network": "通信が不安定です。少し待ってからもう一度お試しください。",
+    "service-unavailable": "音声認識を利用できません。係員が対応します。",
+    "no-connection": "サーバーに接続できていません。少し待ってからもう一度お試しください。",
+    "unknown": "音声を認識できませんでした。もう一度お試しください。",
+  },
+  en: {
+    "mic-denied": "The microphone cannot be used. Our staff will assist you.",
+    "mic-not-found": "No microphone was found. Our staff will assist you.",
+    "network": "The connection is unstable. Please wait a moment and try again.",
+    "service-unavailable": "Speech recognition is unavailable. Our staff will assist you.",
+    "no-connection": "Not connected to the server. Please wait a moment and try again.",
+    "unknown": "Your speech could not be recognized. Please try again.",
+  },
+  zh: {
+    "mic-denied": "无法使用麦克风。工作人员将为您处理。",
+    "mic-not-found": "未找到麦克风。工作人员将为您处理。",
+    "network": "网络不稳定，请稍候再试。",
+    "service-unavailable": "无法使用语音识别。工作人员将为您处理。",
+    "no-connection": "未连接到服务器，请稍候再试。",
+    "unknown": "未能识别您的语音，请再试一次。",
+  },
+  "zh-TW": {
+    "mic-denied": "無法使用麥克風。服務人員將為您處理。",
+    "mic-not-found": "找不到麥克風。服務人員將為您處理。",
+    "network": "網路不穩定，請稍候再試。",
+    "service-unavailable": "無法使用語音辨識。服務人員將為您處理。",
+    "no-connection": "未連線到伺服器，請稍候再試。",
+    "unknown": "未能辨識您的語音，請再試一次。",
+  },
+  ko: {
+    "mic-denied": "마이크를 사용할 수 없습니다. 담당자가 대응합니다.",
+    "mic-not-found": "마이크를 찾을 수 없습니다. 담당자가 대응합니다.",
+    "network": "통신이 불안정합니다. 잠시 후 다시 시도해 주세요.",
+    "service-unavailable": "음성 인식을 사용할 수 없습니다. 담당자가 대응합니다.",
+    "no-connection": "서버에 연결되어 있지 않습니다. 잠시 후 다시 시도해 주세요.",
+    "unknown": "음성을 인식하지 못했습니다. 다시 시도해 주세요.",
+  },
+  fr: {
+    "mic-denied": "Le micro ne peut pas être utilisé. Un agent va vous aider.",
+    "mic-not-found": "Aucun micro détecté. Un agent va vous aider.",
+    "network": "La connexion est instable. Veuillez patienter et réessayer.",
+    "service-unavailable": "La reconnaissance vocale est indisponible. Un agent va vous aider.",
+    "no-connection": "Non connecté au serveur. Veuillez patienter et réessayer.",
+    "unknown": "Votre voix n'a pas pu être reconnue. Veuillez réessayer.",
+  },
+  es: {
+    "mic-denied": "No se puede usar el micrófono. Un agente le atenderá.",
+    "mic-not-found": "No se ha encontrado ningún micrófono. Un agente le atenderá.",
+    "network": "La conexión es inestable. Espere un momento e inténtelo de nuevo.",
+    "service-unavailable": "El reconocimiento de voz no está disponible. Un agente le atenderá.",
+    "no-connection": "Sin conexión con el servidor. Espere un momento e inténtelo de nuevo.",
+    "unknown": "No se pudo reconocer su voz. Inténtelo de nuevo.",
+  },
+  th: {
+    "mic-denied": "ไม่สามารถใช้ไมโครโฟนได้ เจ้าหน้าที่จะช่วยเหลือคุณ",
+    "mic-not-found": "ไม่พบไมโครโฟน เจ้าหน้าที่จะช่วยเหลือคุณ",
+    "network": "การเชื่อมต่อไม่เสถียร กรุณารอสักครู่แล้วลองใหม่",
+    "service-unavailable": "ไม่สามารถใช้การรู้จำเสียงได้ เจ้าหน้าที่จะช่วยเหลือคุณ",
+    "no-connection": "ไม่ได้เชื่อมต่อกับเซิร์ฟเวอร์ กรุณารอสักครู่แล้วลองใหม่",
+    "unknown": "ไม่สามารถรู้จำเสียงของคุณได้ กรุณาลองใหม่",
   },
 };
 
@@ -337,9 +409,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
 
   // If speech recognition encounters a fatal error, reset micOnRef too
   useEffect(() => {
-    if (micError && (
-      micError.includes("拒否") || micError.includes("見つかりません")
-    )) {
+    if (micError === "mic-denied" || micError === "mic-not-found") {
       micOnRef.current = false;
     }
   }, [micError]);
@@ -384,6 +454,18 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
 
   // Track the most recent text the avatar spoke — used to filter echo
   const lastAvatarTextRef = useRef<string>("");
+  // 直近の係員の発言id。音声を再生できなかったとき、この発言を文字で出す。
+  const lastStaffEntryIdRef = useRef<string | null>(null);
+
+  // アバターが音声を再生できなかったとき（デコード失敗・自動再生のブロック等）。
+  // サーバーは音声を送れているので合成側では検知できない。ここで文字を出し、
+  // 係員にも知らせる（お客様に音も文字も届かない状態を防ぐ）。
+  const handlePlaybackError = useCallback(() => {
+    const id = lastStaffEntryIdRef.current;
+    if (id) setForcedTextIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    const sid = sessionIdRef.current;
+    if (sid) socketRef.current?.emit("tts:playbackFailed", { sessionId: sid });
+  }, []);
 
   // Pause mic when tab goes to background (prevents cross-tab audio pickup)
   useEffect(() => {
@@ -565,6 +647,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       if (payload.isFinal) {
         setInterimStaff("");
         const entryId = addEntry({ speaker: "staff", text: payload.text, isFinal: true });
+        lastStaffEntryIdRef.current = entryId;
         // 音声を届けられなかった＝この1件は設定に関わらず文字で出す
         if (payload.forceShowText) setForcedTextIds((prev) => [...prev, entryId]);
         setLatestAudio(undefined);
@@ -593,6 +676,14 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   }, []);
 
   useEffect(() => { userLangRef.current = userLang; }, [userLang]);
+
+  // マイクの異常を係員へ知らせる。係員からは「話さないお客様」にしか見えず、
+  // マイクの問題だと気づけないため。解消したら null を送って表示を消す。
+  useEffect(() => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    socketRef.current?.emit("user:micError", { sessionId: sid, code: micError });
+  }, [micError]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -643,6 +734,8 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   // テキスト非表示のとき、直前のお客様の発言が係員に届いたか（単独表示の判定に使う）。
   const lastEntry = transcript[transcript.length - 1];
   const lastEntryDelivered = lastEntry?.speaker === "user" && deliveredIds.includes(lastEntry.id);
+  // マイクのエラーは、お客様が選んだ言語の文章にして出す。
+  const micErrText = micError ? (MIC_ERR[userLang] ?? MIC_ERR.ja)[micError] : null;
 
   // --- No Staff ---
   if (phase === "no-staff") {
@@ -908,7 +1001,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
                   {textVisible && interimUser && <span className="ml-3 text-xl text-gray-700">{interimUser}</span>}
                 </p>
               ) : micError ? (
-                <p className="text-base text-red-500">{micError}</p>
+                <p className="text-base text-red-500">{micErrText}</p>
               ) : (
                 <p className="text-3xl font-bold">{ui.micOff}</p>
               )}
@@ -932,6 +1025,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
           <Avatar
             audioBase64={latestAudio}
             onSpeakingChange={notifyAvatarSpeaking}
+            onPlaybackError={handlePlaybackError}
             visible
             size="xl"
           />

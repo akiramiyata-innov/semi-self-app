@@ -43,6 +43,11 @@ interface ActiveCallPanelProps {
   textVisible?: boolean;
   /** お客様画面のテキスト表示を切り替える。お客様側の操作と対等（後勝ち）。 */
   onToggleText?: () => void;
+  /**
+   * お客様側のマイク異常（null＝異常なし）。係員からは「話さないお客様」にしか
+   * 見えないため、原因を切り分けられるよう常時表示する。
+   */
+  userMicError?: string | null;
 }
 
 export function ActiveCallPanel({
@@ -65,6 +70,7 @@ export function ActiveCallPanel({
   soloView = false,
   textVisible = false,
   onToggleText,
+  userMicError,
 }: ActiveCallPanelProps) {
   const [inputText, setInputText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -225,7 +231,16 @@ export function ActiveCallPanel({
         </div>
       )}
 
-      {/* Mic error */}
+      {/* お客様側のマイク異常。トーストは4秒で消えるので、続いている間は帯で出し続ける。 */}
+      {userMicError && (
+        <div className="bg-orange-50 border-b border-orange-300 px-3 py-1.5 flex items-center gap-2 shrink-0">
+          <MicOff size={14} className="text-orange-700 shrink-0" />
+          <span className="text-orange-800 text-xs font-bold">{userMicError}</span>
+          <span className="text-orange-700 text-xs">お客様の声が届きません。テキスト送信でご案内してください。</span>
+        </div>
+      )}
+
+      {/* Mic error（係員自身） */}
       {micError && (
         <div className="bg-red-50 border-b border-red-200 px-3 py-1.5 text-red-700 text-xs whitespace-pre-line shrink-0">
           ⚠️ {micError}

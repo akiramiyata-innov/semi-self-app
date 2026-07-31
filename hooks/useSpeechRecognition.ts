@@ -3,6 +3,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 
+/**
+ * マイク／音声認識のエラー種別。**文言ではなくコードを返す**のは、お客様画面では
+ * お客様が選んだ言語で、係員画面では日本語で出す必要があるため。表示文言は
+ * 画面側が持つ（お客様画面＝8言語、係員画面＝日本語）。
+ */
+export type MicErrorCode =
+  | "mic-denied"          // マイクの使用を許可されていない
+  | "mic-not-found"       // マイクが見つからない
+  | "network"             // ネットワークが必要／届かない
+  | "service-unavailable" // 音声認識サービスを利用できない
+  | "no-connection"       // サーバーに接続できていない
+  | "unknown";            // それ以外
+
 interface UseSpeechRecognitionOptions {
   lang?: string;
   onInterim?: (text: string) => void;
@@ -50,7 +63,9 @@ function blobToBase64(blob: Blob): Promise<string> {
 
 export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onStop, getSocket }: UseSpeechRecognitionOptions) {
   const [listening, setListening] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<MicErrorCode | null>(null);
+  // 技術的な詳細（係員画面にだけ添える。お客様には出さない）
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
 
   const activeRef = useRef(false);
   const langRef = useRef(lang);
@@ -147,7 +162,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
       if (p.transcript) { onInterimRef.current?.(""); onFinalRef.current?.(p.transcript); }
     };
     const onErr = (p: { message?: string }) => {
-      if (activeRef.current) setError(p?.message ? `音声認識エラー: ${p.message}` : "音声認識エラー");
+      if (activeRef.current) { setError("unknown"); setErrorDetail(p?.message ?? null); }
     };
     socket.on("stt:interim", onInterim);
     socket.on("stt:final", onFinal);
@@ -184,7 +199,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
 
   const startStreaming = useCallback(async () => {
     const socket = getSocketRef.current?.();
-    if (!socket) { setError("サーバーに接続できていません。少し待って再度お試しください。"); return; }
+    if (!socket) { setError("no-connection"); setErrorDetail(null); return; }
     // 稼働中、または取得処理が進行中なら何もしない。マイク取得(getUserMedia)は完了まで一瞬
     // かかるため、この「取得中」も弾かないと、Space連打時に同じマイクを二重取得しようとして
     // OSが一時的に掴めず（NotReadableError等）、実害のない偽エラーが表示されてしまう。
@@ -222,11 +237,8 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
       if (sttGenRef.current !== gen) return;
       sttWantRef.current = false; // 本物の失敗 → 再開ループを止める（利用者が再度ONにするまで待つ）
       const err = e as DOMException;
-      setError(
-        err.name === "NotAllowedError"
-          ? "マイクへのアクセスが拒否されました。ブラウザの設定でマイクを許可してください。"
-          : "マイクへのアクセスに失敗しました。"
-      );
+      setError(err.name === "NotAllowedError" ? "mic-denied" : "unknown");
+      setErrorDetail(err.name === "NotAllowedError" ? null : err.name);
       stopStreaming();
     } finally {
       sttStartingRef.current = false;
@@ -255,7 +267,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
     recognitionRef.current = rec;
 
     rec.onresult = (event: SpeechRecognitionEvent) => {
-      setError(null);
+      setError(null); setErrorDetail(null);
       let interim = "";
       let final = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -277,22 +289,22 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
     rec.onerror = (event: SpeechRecognitionErrorEvent) => {
       const err = event.error;
       if (err === "not-allowed") {
-        setError("マイクへのアクセスが拒否されました。\nアドレスバー左端のアイコン →「マイク」→「許可」に変更し、ページをリロードしてください。");
+        setError("mic-denied"); setErrorDetail(null);
         activeRef.current = false; setListening(false);
       } else if (err === "service-not-allowed") {
-        setError("音声認識サービスを利用できません。\nインターネット接続を確認するか、Chromeのアドレスバー左端のアイコンから「マイク」と「音声」を許可してください。");
+        setError("service-unavailable"); setErrorDetail(null);
         activeRef.current = false; setListening(false);
       } else if (err === "network") {
-        setError("ネットワークエラー: 音声認識にはインターネット接続が必要です。");
+        setError("network"); setErrorDetail(null);
       } else if (err === "no-speech") {
-        setError(null);
+        setError(null); setErrorDetail(null);
       } else if (err === "audio-capture") {
-        setError("マイクが見つかりません。マイクの接続を確認してください。");
+        setError("mic-not-found"); setErrorDetail(null);
         activeRef.current = false; setListening(false);
       } else if (err === "aborted") {
-        setError(null);
+        setError(null); setErrorDetail(null);
       } else {
-        setError(`音声認識エラー: ${err}`);
+        setError("unknown"); setErrorDetail(String(err));
         console.warn("[SpeechRecognition] unhandled error:", err);
       }
     };
@@ -315,7 +327,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
   // ── Public: start ──────────────────────────────────────────────────────────
   const start = useCallback(async (newLang?: string) => {
     if (newLang) langRef.current = newLang;
-    setError(null);
+    setError(null); setErrorDetail(null);
 
     if (streamingEnabled) {
       sttWantRef.current = true; // マイクON希望を記録（連打時、取得中に状態が変わっても最終状態へ合わせる）
@@ -328,11 +340,11 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
 
       const warmup = await warmUpMicrophone();
       if (warmup === "denied") {
-        setError("マイクへのアクセスが拒否されました。\nアドレスバー左端のアイコン →「マイク」→「許可」に変更し、ページをリロードしてください。");
+        setError("mic-denied"); setErrorDetail(null);
         return;
       }
       if (warmup === "not-found") {
-        setError("マイクが見つかりません。マイクの接続を確認してください。");
+        setError("mic-not-found"); setErrorDetail(null);
         return;
       }
       activeRef.current = true;
@@ -349,11 +361,8 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
         startGstManual(stream);
       } catch (e) {
         const err = e as DOMException;
-        setError(
-          err.name === "NotAllowedError"
-            ? "マイクへのアクセスが拒否されました。ブラウザの設定でマイクを許可してください。"
-            : "マイクへのアクセスに失敗しました。"
-        );
+        setError(err.name === "NotAllowedError" ? "mic-denied" : "unknown");
+        setErrorDetail(err.name === "NotAllowedError" ? null : err.name);
       }
     }
   }, [streamingEnabled, startStreaming, useWebSpeech, startGstManual]);
@@ -381,7 +390,7 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
       }
     }
     setListening(false);
-    setError(null);
+    setError(null); setErrorDetail(null);
   }, [streamingEnabled, stopStreaming, useWebSpeech]);
 
   // ── Cleanup on unmount ─────────────────────────────────────────────────────
@@ -405,5 +414,5 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
   }, []);
 
   // manualStop=true → streaming / Edge・GST（手動ON/OFF）、false → Chrome（onFinal で自動OFF）
-  return { start, stop, listening, supported: true, error, manualStop: streamingEnabled || !useWebSpeech };
+  return { start, stop, listening, supported: true, error, errorDetail, manualStop: streamingEnabled || !useWebSpeech };
 }

@@ -28,6 +28,10 @@ export interface TranscriptEntry {
   translatedText?: string;
   isFinal: boolean;
   timestamp: number;
+  /** 翻訳に失敗した発言（係員画面に印を残し、トーストを見逃しても分かるようにする）。 */
+  translationFailed?: boolean;
+  /** 音声をお客様に届けられなかった発言（合成失敗・お客様の端末での再生失敗）。 */
+  voiceFailed?: boolean;
 }
 
 /** 性能検証テスト用の自動測定値（server/metrics.ts が記録）。単位はミリ秒。 */

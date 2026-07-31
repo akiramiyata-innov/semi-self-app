@@ -126,6 +126,8 @@ async function saveSessionLog(session: ActiveSession): Promise<void> {
       console.log(`[log] saved to GCS: logs/${date}/${session.sessionId}.json (${session.transcript.length} entries)`);
     } catch (e) {
       console.error("[log] failed to save to GCS:", e);
+      // 黙って欠けると性能テストの記録が失われるので係員へ知らせる。
+      io.to(session.staffSocketId).emit("error:logSave", { sessionId: session.sessionId });
     }
     return;
   }
@@ -140,6 +142,7 @@ async function saveSessionLog(session: ActiveSession): Promise<void> {
     console.log(`[log] saved: logs/${date}/${session.sessionId}.json (${session.transcript.length} entries)`);
   } catch (e) {
     console.error("[log] failed to save session log:", e);
+    io.to(session.staffSocketId).emit("error:logSave", { sessionId: session.sessionId });
   }
 }
 
@@ -271,7 +274,12 @@ function glossaryPattern(src: string): RegExp {
 }
 
 async function translateWithGlossary(text: string, fromLang: string, toLang: string): Promise<string> {
-  const terms = await getGlossaryTermsFresh();
+  // 用語集が読めなくても翻訳そのものは続ける。音声認識用・音声合成用は以前から
+  // 同じ扱いで、ここだけ巻き添えで翻訳全体が失敗していた。
+  const terms = await getGlossaryTermsFresh().catch((e) => {
+    console.error("[translate] 用語集を読めなかったため、用語集なしで翻訳する:", e);
+    return [] as GlossaryTerm[];
+  });
   // Replace longer source terms first so a short term (e.g. 東京) can't consume
   // part of a longer one (東京駅) before it gets its own fixed translation.
   const entries = terms
@@ -714,11 +722,13 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         if (lang !== session.userLang) session.userLang = lang;
 
         let translatedText: string | undefined;
+        let translationFailed = false;
         if (isFinal && lang !== "ja") {
           try {
             translatedText = await translateWithGlossary(text, lang, "ja");
           } catch (e) {
             console.error("[speech:user] translation error:", e);
+            translationFailed = true;
             io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "userToJa" });
           }
         }
@@ -733,10 +743,11 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
             translatedText,
             isFinal: true,
             timestamp: Date.now(),
+            translationFailed: translationFailed || undefined,
           });
         }
 
-        io.to(session.staffSocketId).emit("speech:user", { sessionId, text, lang, isFinal, translatedText });
+        io.to(session.staffSocketId).emit("speech:user", { sessionId, text, lang, isFinal, translatedText, translationFailed });
 
         // お客様側に「係員の画面に届いた」ことを返す（キオスクで既読チェックを表示する）。
         // 待っている間の不安（伝わったのか分からない）を解消するための通知。
@@ -802,11 +813,13 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           return;
         }
 
+        let translationFailed = false;
         if (userLang !== "ja") {
           try {
             translatedText = await translateWithGlossary(text, "ja", userLang);
           } catch (e) {
             console.error("[speech:staff] translation error:", e);
+            translationFailed = true;
             io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "jaToUser" });
             translatedText = text; // fallback: send Japanese text as-is
           }
@@ -823,6 +836,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         io.to(session.staffSocketId).emit("speech:staff", {
           sessionId, text, isFinal: true, clientId,
           translatedText: userLang !== "ja" ? translatedText : undefined,
+          // 4秒で消えるトーストを見逃しても分かるよう、発言そのものに印を残す。
+          translationFailed, voiceFailed: !tts.ok,
         });
 
         // 音声を丸ごと届けられなかったときは、テキスト非表示の設定であっても
@@ -841,7 +856,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         // 言い直せるように知らせる。partial=途中が抜けた音声が再生された場合。
         if (!tts.ok) {
           const partial = audioBase64.length > 0;
-          io.to(session.staffSocketId).emit("error:tts", { sessionId, partial });
+          io.to(session.staffSocketId).emit("error:tts", { sessionId, partial, reason: "synthesis" });
           console.error(`[tts] 音声を届けられなかった session=${sessionId} partial=${partial}`);
         }
 
@@ -852,6 +867,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           translatedText: userLang !== "ja" ? translatedText : undefined,
           isFinal: true,
           timestamp: Date.now(),
+          translationFailed: translationFailed || undefined,
+          voiceFailed: !tts.ok || undefined,
         });
       }
     );
@@ -922,6 +939,34 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       io.to(session.userSocketId).emit("session:textVisible", update);
       io.to(session.staffSocketId).emit("session:textVisible", update);
       console.log(`[text] session=${payload.sessionId} → ${visible ? "表示" : "非表示"}`);
+    });
+
+    // ── お客様の端末で音声を再生できなかった ───────────────────────────────────
+    // サーバーは音声を送れているので合成側では検知できない（ブラウザ側の再生・
+    // デコード失敗、自動再生のブロック等）。放置すると、お客様には音も文字も届かず、
+    // 係員も気づけないため、キオスクから知らせてもらう。
+    socket.on("tts:playbackFailed", (payload: { sessionId: string }) => {
+      const session = activeSessions.get(payload.sessionId);
+      if (!session || session.userSocketId !== socket.id) return;
+      io.to(session.staffSocketId).emit("error:tts", {
+        sessionId: payload.sessionId,
+        partial: false,
+        reason: "playback",
+      });
+      console.error(`[tts] お客様の端末で再生できなかった session=${payload.sessionId}`);
+    });
+
+    // ── お客様側のマイク異常 ──────────────────────────────────────────────────
+    // 係員からは「呼び出したのに話さないお客様」にしか見えず、マイクの問題だと
+    // 気づけないため伝える。code=null は解消の合図。
+    socket.on("user:micError", (payload: { sessionId: string; code: string | null }) => {
+      const session = activeSessions.get(payload.sessionId);
+      if (!session || session.userSocketId !== socket.id) return;
+      io.to(session.staffSocketId).emit("user:micError", {
+        sessionId: payload.sessionId,
+        code: payload.code,
+      });
+      console.log(`[mic] お客様側のマイク異常 session=${payload.sessionId} code=${payload.code ?? "解消"}`);
     });
 
     // ── Disconnect cleanup ────────────────────────────────────────────────────
