@@ -10,7 +10,7 @@ import type { TranscriptEntry, SessionLog } from "../lib/types";
 import { isGCSEnabled, uploadLog } from "../lib/gcsClient";
 import { getGlossaryTermsFresh } from "../lib/glossaryClient";
 import { getAssignmentsFresh } from "../lib/assignmentClient";
-import { recordAppError } from "./errorLog";
+import { recordAppError, setSocketContextResolver } from "./errorLog";
 import type { GlossaryTerm } from "../lib/types";
 import { registerSttHandlers } from "./sttStream";
 import { verifySessionToken, SESSION_COOKIE_NAME } from "../lib/session";
@@ -151,7 +151,7 @@ async function saveSessionLog(session: ActiveSession): Promise<void> {
     }
     // 黙って欠けると性能テストの記録が失われるので係員へ知らせる。
     io.to(session.staffSocketId).emit("error:logSave", { sessionId: session.sessionId });
-    recordAppError({ type: "logsave", sessionId: session.sessionId, machineName: session.machineName, detail: "GCSへ保存できず（再試行も失敗）。サーバー内へ退避を試みた" });
+    recordAppError({ type: "logsave", sessionId: session.sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), detail: "GCSへ保存できず（再試行も失敗）。サーバー内へ退避を試みた" });
     return;
   }
 
@@ -161,7 +161,7 @@ async function saveSessionLog(session: ActiveSession): Promise<void> {
   } catch (e) {
     console.error("[log] failed to save session log:", e);
     io.to(session.staffSocketId).emit("error:logSave", { sessionId: session.sessionId });
-    recordAppError({ type: "logsave", sessionId: session.sessionId, machineName: session.machineName, detail: `通話ログを保存できなかった: ${String(e).slice(0, 120)}` });
+    recordAppError({ type: "logsave", sessionId: session.sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), detail: `通話ログを保存できなかった: ${String(e).slice(0, 120)}` });
   }
 }
 
@@ -206,6 +206,12 @@ function releaseSession(sessionId: string, staffSocketId: string): void {
       staff.status = "available";
     }
   }
+}
+
+// ── 障害履歴に添える情報 ──────────────────────────────────────────────────────
+/** その通話を担当している係員の名前（離席・切断後は undefined）。 */
+function staffNameOfSession(session: { staffSocketId: string }): string | undefined {
+  return staffMap.get(session.staffSocketId)?.name;
 }
 
 // ── 切断の記録 ────────────────────────────────────────────────────────────────
@@ -632,6 +638,23 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     return null;
   });
 
+  // 障害履歴が socket から「どの通話・どの端末・どちら側・どの係員か」を引けるようにする。
+  // 音声認識の記録（認識ガード等）は sttStream 側で作られ、そこには通話の情報が無いため。
+  setSocketContextResolver((socketId) => {
+    for (const [sessionId, s] of activeSessions) {
+      if (s.userSocketId === socketId) {
+        return { sessionId, machineName: s.machineName, staffName: staffNameOfSession(s), side: "user" };
+      }
+      if (s.staffSocketId === socketId) {
+        return { sessionId, machineName: s.machineName, staffName: staffNameOfSession(s), side: "staff" };
+      }
+    }
+    // 通話に入っていない係員（待機中の動作確認など）
+    const staff = staffMap.get(socketId);
+    if (staff) return { staffName: staff.name, side: "staff" };
+    return {};
+  });
+
   io.use(async (socket, next) => {
     try {
       const token = parseCookie(socket.handshake.headers.cookie, SESSION_COOKIE_NAME);
@@ -885,7 +908,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           } catch (e) {
             console.error("[speech:user] translation error:", e);
             translationFailed = true;
-            recordAppError({ type: "translate", sessionId, machineName: session.machineName, detail: `お客様の発言を翻訳できなかった（${lang}→日本語）: ${String(e).slice(0, 120)}` });
+            recordAppError({ type: "translate", sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), side: "user", detail: `お客様の発言を翻訳できなかった（${lang}→日本語）: ${String(e).slice(0, 120)}` });
             io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "userToJa" });
           }
         }
@@ -980,7 +1003,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           } catch (e) {
             console.error("[speech:staff] translation error:", e);
             translationFailed = true;
-            recordAppError({ type: "translate", sessionId, machineName: session.machineName, detail: `係員の発言を翻訳できなかった（日本語→${userLang}）: ${String(e).slice(0, 120)}` });
+            recordAppError({ type: "translate", sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), side: "staff", detail: `係員の発言を翻訳できなかった（日本語→${userLang}）: ${String(e).slice(0, 120)}` });
             io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "jaToUser" });
             translatedText = text; // fallback: send Japanese text as-is
           }
@@ -1019,7 +1042,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           const partial = audioBase64.length > 0;
           io.to(session.staffSocketId).emit("error:tts", { sessionId, partial, reason: "synthesis" });
           console.error(`[tts] 音声を届けられなかった session=${sessionId} partial=${partial}`);
-          recordAppError({ type: "tts-synthesis", sessionId, machineName: session.machineName, detail: `${partial ? "一部の" : ""}音声を合成できず文字のみ表示: ${text.slice(0, 60)}` });
+          recordAppError({ type: "tts-synthesis", sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), side: "staff", detail: `${partial ? "一部の" : ""}音声を合成できず文字のみ表示: ${text.slice(0, 60)}` });
         }
 
         session.transcript.push({
@@ -1116,7 +1139,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         reason: "playback",
       });
       console.error(`[tts] お客様の端末で再生できなかった session=${payload.sessionId}`);
-      recordAppError({ type: "tts-playback", sessionId: payload.sessionId, machineName: session.machineName, detail: "お客様の端末で音声を再生できなかった（文字のみ表示）" });
+      recordAppError({ type: "tts-playback", sessionId: payload.sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), side: "user", detail: "お客様の端末で音声を再生できなかった（文字のみ表示）" });
     });
 
     // ── お客様側のマイク異常 ──────────────────────────────────────────────────
@@ -1130,7 +1153,33 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         code: payload.code,
       });
       console.log(`[mic] お客様側のマイク異常 session=${payload.sessionId} code=${payload.code ?? "解消"}`);
-      if (payload.code) recordAppError({ type: "mic-user", sessionId: payload.sessionId, machineName: session.machineName, detail: `お客様側のマイク異常: ${payload.code}` });
+      if (payload.code) recordAppError({ type: "mic-user", sessionId: payload.sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), side: "user", detail: `お客様側のマイク異常: ${payload.code}` });
+    });
+
+    // ── 係員自身のマイク異常 ──────────────────────────────────────────────────
+    // 係員の画面には警告が出るが、それだけでは後から「あの日あの係員のマイクが
+    // 不調だった」を追えない。お客様側（user:micError）と同じく記録に残す。
+    // 通話中でなくても起こる（待機中の動作確認など）ので、通話の有無は問わない。
+    socket.on("staff:micError", (payload: { code: string | null }) => {
+      if (!getStaffSession(socket)) return;
+      const staff = staffMap.get(socket.id);
+      const name = staff?.name ?? getStaffSession(socket)?.name ?? "名前不明";
+      console.log(`[mic] 係員のマイク異常 staff=${name} code=${payload?.code ?? "解消"}`);
+      if (!payload?.code) return; // null は解消の合図
+      // 対応中の通話があれば、どの通話中だったかも残す（複数なら1件目）
+      let sessionId: string | undefined;
+      let machineName: string | undefined;
+      for (const [sid, s] of activeSessions) {
+        if (s.staffSocketId === socket.id) { sessionId = sid; machineName = s.machineName; break; }
+      }
+      recordAppError({
+        type: "mic-staff",
+        sessionId,
+        machineName,
+        staffName: name,
+        side: "staff",
+        detail: `係員側のマイク異常: ${payload.code}`,
+      });
     });
 
     // ── Disconnect cleanup ────────────────────────────────────────────────────
@@ -1146,14 +1195,15 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           metrics.noteDisconnect(sessionId);
           // 障害履歴にも残す。画面の通知はその場限りで消えるため、後から
           // 「誰が・どの通話で・通話中だったか」を追えるようにする。
-          const who = session.userSocketId === socket.id
-            ? "お客様"
-            : `係員（${staffName ?? "名前不明"}）`;
+          const isUser = session.userSocketId === socket.id;
           recordAppError({
             type: "disconnect",
             sessionId,
             machineName: session.machineName,
-            detail: `通話中に${who}の接続が切れた: ${disconnectReasonJa(reason)}`,
+            // 係員が切れた場合はその係員、お客様が切れた場合は対応中だった係員
+            staffName: isUser ? staffNameOfSession(session) : staffName,
+            side: isUser ? "user" : "staff",
+            detail: `通話中に${isUser ? "お客様" : "係員"}の接続が切れた: ${disconnectReasonJa(reason)}`,
           });
           saveSessionLog(session).catch((e) => console.error("[log] disconnect save error:", e));
 
@@ -1188,6 +1238,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
             type: "disconnect",
             sessionId,
             machineName: record.machineName,
+            side: "user",
             detail: `呼び出し中（応答前）にお客様の接続が切れた: ${disconnectReasonJa(reason)}`,
           });
           callQueue.delete(sessionId);

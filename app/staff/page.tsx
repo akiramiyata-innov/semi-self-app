@@ -389,6 +389,13 @@ export default function StaffPage() {
     },
   });
 
+  // 自分のマイク異常をサーバーへ知らせる（障害履歴に残すため）。画面の警告だけでは
+  // その場限りで、後から「あの日この係員のマイクが不調だった」を追えないため。
+  // お客様側（user:micError）と同じ扱い。null は解消の合図。
+  useEffect(() => {
+    socketRef.current?.emit("staff:micError", { code: micError });
+  }, [micError]);
+
   // ── Screen Capture ───────────────────────────────────────────────────────
   const captureSessionRef = useRef<string | null>(null);
 

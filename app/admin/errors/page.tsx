@@ -12,6 +12,7 @@ const TYPE_LABELS: Record<string, { label: string; color: string }> = {
   "tts-playback": { label: "音声再生失敗", color: "bg-red-100 text-red-700" },
   "logsave": { label: "ログ保存失敗", color: "bg-red-100 text-red-700" },
   "mic-user": { label: "お客様マイク異常", color: "bg-orange-100 text-orange-700" },
+  "mic-staff": { label: "係員マイク異常", color: "bg-orange-100 text-orange-700" },
   "call-timeout": { label: "呼び出し未応答", color: "bg-orange-100 text-orange-700" },
   "disconnect": { label: "接続切断", color: "bg-orange-100 text-orange-700" },
   "stt-stream": { label: "音声認識の接続エラー", color: "bg-red-100 text-red-700" },
@@ -102,6 +103,7 @@ export default function ErrorsPage() {
                   <th className="px-4 py-2.5 font-medium whitespace-nowrap">発生時刻（日本時間）</th>
                   <th className="px-4 py-2.5 font-medium whitespace-nowrap">種類</th>
                   <th className="px-4 py-2.5 font-medium whitespace-nowrap">端末</th>
+                  <th className="px-4 py-2.5 font-medium whitespace-nowrap">係員</th>
                   <th className="px-4 py-2.5 font-medium">内容</th>
                 </tr>
               </thead>
@@ -113,8 +115,15 @@ export default function ErrorsPage() {
                       <td className="px-4 py-2.5 text-gray-600 whitespace-nowrap">{jst(e.at)}</td>
                       <td className="px-4 py-2.5 whitespace-nowrap">
                         <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${t.color}`}>{t.label}</span>
+                        {/* 発生元。認識ガードは係員の発話でも作動するため、どちらの声かが要る */}
+                        {e.side && (
+                          <span className="ml-1.5 inline-block px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600">
+                            {e.side === "user" ? "お客様側" : "係員側"}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-gray-600 whitespace-nowrap">{e.machineName ?? "—"}</td>
+                      <td className="px-4 py-2.5 text-gray-600 whitespace-nowrap">{e.staffName ?? "—"}</td>
                       <td className="px-4 py-2.5 text-gray-700 break-all">{e.detail ?? "—"}</td>
                     </tr>
                   );

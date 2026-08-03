@@ -71,10 +71,17 @@ export interface SessionSummary {
 export interface AppErrorEntry {
   /** 発生時刻（エポックms） */
   at: number;
-  /** 種類（translate / tts-synthesis / tts-playback / logsave / mic-user / call-timeout / disconnect / stt-guard-* / stt-stream） */
+  /** 種類（translate / tts-synthesis / tts-playback / logsave / mic-user / mic-staff / call-timeout / disconnect / stt-guard-* / stt-stream） */
   type: string;
   sessionId?: string;
   machineName?: string;
+  /** 対応していた係員の名前（分かる場合）。「誰が対応中に起きたか」を後から追うため。 */
+  staffName?: string;
+  /**
+   * 発生元がお客様側か係員側か。**音声認識まわりの記録で特に重要**で、
+   * 認識ガードは係員の発話でも作動するため、これが無いとどちらの声か分からない。
+   */
+  side?: "user" | "staff";
   /** 人が読む詳細（エラー内容・しきい値・対象テキストなど） */
   detail?: string;
 }
