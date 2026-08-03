@@ -5,7 +5,15 @@
 
 /** 発話とみなすチャンクRMSのしきい値（Int16振幅スケール。静かな室内ノイズは概ね100前後、通常発話は500〜3000）。 */
 export const SPEECH_RMS = 300;
-/** 確定結果を受け入れるのに必要な発話チャンク数（1チャンク≒100ms → 2個≒0.2秒の発話音量）。 */
+/**
+ * 発話とみなすのに必要な「連続した」しきい値超えチャンク数（1チャンク≒100ms → 2個≒0.2秒）。
+ *
+ * ★連続であることが重要（2026-08-03 の「みとよし」事故の教訓）。当初は窓内の合計数で
+ * 数えていたため、マウスのクリック音のような単発の物音（1チャンクだけ超える・実測RMS
+ * 320〜360）が15秒以内にバラバラに2回あるだけで条件を満たし、その区間のモデルの幻聴が
+ * 素通りした。人の声は最小の「はい」（小声）でも2チャンク連続で超える（TTS実測）ので、
+ * 連続を要求しても発話は締め出されない。
+ */
 export const MIN_SPEECH_CHUNKS = 2;
 /** 発話チャンクを数える時間窓。これより古い発話は「今の確定結果」の根拠にしない。 */
 export const SPEECH_WINDOW_MS = 15_000;
@@ -29,7 +37,7 @@ export function chunkRms(chunk: Buffer): number {
 export interface GateVerdict {
   /** true = 発話あり → 認識結果を採用。false = 無音区間 → 幻聴とみなし破棄。 */
   accept: boolean;
-  /** 判定に使った発話チャンク数（時間窓内）。 */
+  /** 判定に使った発話チャンク数（時間窓内・連続条件を満たしたものだけ）。 */
   speechChunks: number;
   /** 前回の確定以降に観測した最大RMS（しきい値調整用）。 */
   maxRms: number;
@@ -38,11 +46,30 @@ export interface GateVerdict {
 export class SilenceGate {
   private times: number[] = [];
   private maxRms = 0;
+  // 現在進行中の「しきい値超えの連続」。MIN_SPEECH_CHUNKS まで続いて初めて発話と
+  // 認め、それまでの分をまとめて times へ移す。単発（クリック音等）はここで捨てられる。
+  private pending: number[] = [];
+  private runQualified = false;
 
   /** 音声チャンクを1つ観測するたびに呼ぶ。 */
   onChunk(rms: number, now: number = Date.now()): void {
     if (rms > this.maxRms) this.maxRms = rms;
-    if (rms >= SPEECH_RMS) this.times.push(now);
+    if (rms >= SPEECH_RMS) {
+      if (this.runQualified) {
+        this.times.push(now); // 連続が既に発話と認められている → そのまま数える
+      } else {
+        this.pending.push(now);
+        if (this.pending.length >= MIN_SPEECH_CHUNKS) {
+          this.times.push(...this.pending); // 連続が条件に達した → さかのぼって数える
+          this.pending = [];
+          this.runQualified = true;
+        }
+      }
+    } else {
+      // 連続が途切れた。条件に達しなかった分（単発の物音）は発話と数えない
+      this.pending = [];
+      this.runQualified = false;
+    }
     const cutoff = now - SPEECH_WINDOW_MS;
     while (this.times.length > 0 && this.times[0] < cutoff) this.times.shift();
   }
@@ -60,6 +87,8 @@ export class SilenceGate {
     const verdict: GateVerdict = { accept: speechChunks >= MIN_SPEECH_CHUNKS, speechChunks, maxRms: this.maxRms };
     this.times = [];
     this.maxRms = 0;
+    // pending / runQualified は消さない：話し続けている最中に確定が来た場合、続きの
+    // チャンクは同じ発話の一部なので、次の確定に向けてそのまま数え続ける。
     return verdict;
   }
 
@@ -67,5 +96,7 @@ export class SilenceGate {
   reset(): void {
     this.times = [];
     this.maxRms = 0;
+    this.pending = [];
+    this.runQualified = false;
   }
 }
