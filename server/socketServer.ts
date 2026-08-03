@@ -121,29 +121,44 @@ async function saveSessionLog(session: ActiveSession): Promise<void> {
   const date = jstDateString(endedAt);
 
   if (isGCSEnabled()) {
-    try {
-      await uploadLog(date, session.sessionId, log);
-      console.log(`[log] saved to GCS: logs/${date}/${session.sessionId}.json (${session.transcript.length} entries)`);
-    } catch (e) {
-      console.error("[log] failed to save to GCS:", e);
-      // 黙って欠けると性能テストの記録が失われるので係員へ知らせる。
-      io.to(session.staffSocketId).emit("error:logSave", { sessionId: session.sessionId });
+    // 一時的な失敗（ネットワークの瞬断等）に備えて2秒おいて1回だけ再試行する。
+    // それでも保存できなければサーバー内のファイルへ退避し（次のデプロイまでの
+    // 一時保管。記録が完全に失われるよりまし）、係員へ知らせる。
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await uploadLog(date, session.sessionId, log);
+        console.log(`[log] saved to GCS: logs/${date}/${session.sessionId}.json (${session.transcript.length} entries)${attempt > 1 ? " ※再試行で成功" : ""}`);
+        return;
+      } catch (e) {
+        console.error(`[log] failed to save to GCS (${attempt}回目):`, e);
+        if (attempt === 1) await new Promise((r) => setTimeout(r, 2000));
+      }
     }
+    try {
+      await writeLocalLog(date, session.sessionId, log);
+      console.error(`[log] GCSに保存できなかったためサーバー内へ退避した: logs/${date}/${session.sessionId}.json`);
+    } catch (e) {
+      console.error("[log] 退避のローカル保存にも失敗:", e);
+    }
+    // 黙って欠けると性能テストの記録が失われるので係員へ知らせる。
+    io.to(session.staffSocketId).emit("error:logSave", { sessionId: session.sessionId });
     return;
   }
 
-  const dir = path.join(process.cwd(), "logs", date);
   try {
-    await fs.promises.mkdir(dir, { recursive: true });
-    await fs.promises.writeFile(
-      path.join(dir, `${session.sessionId}.json`),
-      JSON.stringify(log, null, 2)
-    );
+    await writeLocalLog(date, session.sessionId, log);
     console.log(`[log] saved: logs/${date}/${session.sessionId}.json (${session.transcript.length} entries)`);
   } catch (e) {
     console.error("[log] failed to save session log:", e);
     io.to(session.staffSocketId).emit("error:logSave", { sessionId: session.sessionId });
   }
+}
+
+/** 通話ログをサーバー内のファイルへ書く（開発時の通常保存と、GCS失敗時の退避に共用）。 */
+async function writeLocalLog(date: string, sessionId: string, log: SessionLog): Promise<void> {
+  const dir = path.join(process.cwd(), "logs", date);
+  await fs.promises.mkdir(dir, { recursive: true });
+  await fs.promises.writeFile(path.join(dir, `${sessionId}.json`), JSON.stringify(log, null, 2));
 }
 
 // ── Staff eligibility ─────────────────────────────────────────────────────────
