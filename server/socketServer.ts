@@ -402,6 +402,38 @@ async function synthesizeChunk(text: string, voiceLangCode: string, voiceName: s
 }
 
 /**
+ * 話し言葉のつなぎ言葉（フィラー）。意味を持たない4語だけに絞る。
+ * 「まあ」「なんか」は意味を持つことがあり（「まあ、大丈夫です」）、「あの」は
+ * 単独では指示語なので、伸ばした「あのー」だけを対象にする。
+ */
+const FILLER_WORDS = ["えっと", "えーと", "ええと", "あのー"];
+// 語の内部で反応しないよう、文頭か区切り文字の直後だけを対象にする。
+const FILLER_RE = new RegExp(`(^|[。、．，！？!?\\s])(?:${FILLER_WORDS.join("|")})[、，,]?\\s*`, "g");
+// 文頭の相づち（「え、」「あ、」）。文中の「え、」は聞き返しの意味を持つので触らない。
+const LEAD_AIZUCHI_RE = /(^|[。．！？!?])\s*[えあ][、，,]\s*/g;
+
+/**
+ * 読み上げ・翻訳の前に、フィラーを落とす。
+ *
+ * 係員の発話をそのまま音声にすると、アバターも「えっと」と言う。実際の通話ログでは
+ * 一文に4回入っている例もあり、読み上げが不自然に聞こえる主因になっていた。
+ * **翻訳より前**に落とすので外国語のお客様にも効く（訳文が "Um, ..." にならない）。
+ * 係員画面の表示と通話ログは原文のままにして、係員が言ったことは残す。
+ */
+export function stripFillers(text: string): string {
+  let out = text;
+  // 「えっと、えっと、」の連続は1回では消えきらない（境目の1文字を消費するため）。
+  for (let i = 0; i < 3; i++) {
+    const next = out.replace(FILLER_RE, "$1").replace(LEAD_AIZUCHI_RE, "$1");
+    if (next === out) break;
+    out = next;
+  }
+  out = out.replace(/[、，,]\s*(?=[、，,])/g, "").replace(/^[、，,\s]+/, "").trim();
+  // 丸ごとフィラーだった発話は、無言で送るより元のまま読むほうがまし。
+  return out || text;
+}
+
+/**
  * 読み上げ用に、英字を含む登録語をその「よみ」へ置き換える（画面表示は変えない）。
  *
  * 日本語の読み上げに英大文字が来ると、音声は「ひとつの単語（すいか）」と「頭文字の略語
@@ -814,9 +846,12 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         }
 
         let translationFailed = false;
+        // 翻訳と読み上げにはフィラーを落とした文を使う。係員画面の表示と通話ログは
+        // 原文（text）のままなので、係員が言ったことは残る。
+        const spoken = stripFillers(text);
         if (userLang !== "ja") {
           try {
-            translatedText = await translateWithGlossary(text, "ja", userLang);
+            translatedText = await translateWithGlossary(spoken, "ja", userLang);
           } catch (e) {
             console.error("[speech:staff] translation error:", e);
             translationFailed = true;
@@ -827,7 +862,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         } else {
           translatedText = text;
           // 表示は text（登録どおりの SUICA）のまま、音声には読み（すいか）を渡す
-          tts = await synthesizeSpeech(await toSpeakableJa(text), "ja");
+          tts = await synthesizeSpeech(await toSpeakableJa(spoken), "ja");
         }
         audioBase64 = tts.audio;
 
