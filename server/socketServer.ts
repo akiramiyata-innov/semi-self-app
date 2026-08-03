@@ -99,6 +99,14 @@ interface ActiveSession extends CallRecord {
 const USER_SPEAKING_MAX_MS = 8_000;
 
 const callQueue = new Map<string, CallRecord>();
+// 呼び出しの未応答タイムアウト。係員が在席していても誰も応答しない場合、お客様を
+// 無期限に待たせないための打ち切り時間（E-2「係員ゼロ」とは別の守り）。
+const CALL_TIMEOUT_MS = Number(process.env.CALL_TIMEOUT_MS ?? 60_000);
+const callTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+function clearCallTimeout(sessionId: string): void {
+  const t = callTimeouts.get(sessionId);
+  if (t) { clearTimeout(t); callTimeouts.delete(sessionId); }
+}
 const activeSessions = new Map<string, ActiveSession>();
 
 let io: Server;
@@ -730,6 +738,23 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         io.to(sid).emit("call:incoming", incomingPayload);
       });
       metrics.noteCallIncoming(sessionId);
+
+      // 未応答タイムアウト: 応答・拒否・キャンセル・切断のいずれかで解除される。
+      // 発火したら呼び出しを打ち切り、お客様へ「混み合っています」、係員へ通知を出す。
+      callTimeouts.set(sessionId, setTimeout(() => {
+        callTimeouts.delete(sessionId);
+        const pending = callQueue.get(sessionId);
+        if (!pending) return; // すでに応答済み等（保険。通常は解除済みでここに来ない）
+        callQueue.delete(sessionId);
+        io.to(pending.userSocketId).emit("call:timeout", { sessionId });
+        io.to("call-queue").emit("call:taken", { sessionId }); // 着信カードを消す
+        io.to("call-queue").emit("call:missed", {
+          sessionId,
+          machineName: pending.machineName,
+          timeoutSeconds: Math.round(CALL_TIMEOUT_MS / 1000),
+        });
+        console.log(`[call] 未応答のため打ち切り: ${pending.machineName} (${sessionId}, ${CALL_TIMEOUT_MS}ms)`);
+      }, CALL_TIMEOUT_MS));
     });
 
     // ── Staff answers a call ──────────────────────────────────────────────────
@@ -755,6 +780,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       }
 
       callQueue.delete(sessionId);
+      clearCallTimeout(sessionId);
       const session: ActiveSession = {
         ...record,
         staffSocketId: socket.id,
@@ -789,6 +815,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       const record = callQueue.get(sessionId);
       if (!record) return;
       callQueue.delete(sessionId);
+      clearCallTimeout(sessionId);
       io.to(record.userSocketId).emit("call:rejected", { sessionId });
       io.to("call-queue").emit("call:taken", { sessionId });
     });
@@ -808,6 +835,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       clearSpeakingState(session);
       activeSessions.delete(sessionId);
       callQueue.delete(sessionId);
+      clearCallTimeout(sessionId);
       io.to(`session:${sessionId}`).emit("call:ended", { sessionId });
       io.to("call-queue").emit("call:ended", { sessionId }); // Notify all staff to clear the call
       socket.leave(`session:${sessionId}`);
@@ -1115,6 +1143,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       callQueue.forEach((record, sessionId) => {
         if (record.userSocketId === socket.id) {
           callQueue.delete(sessionId);
+          clearCallTimeout(sessionId);
           io.to("call-queue").emit("call:taken", { sessionId });
         }
       });

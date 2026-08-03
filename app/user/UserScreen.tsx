@@ -14,18 +14,18 @@ import { useScreenCapture } from "@/hooks/useScreenCapture";
 import type { TranscriptEntry } from "@/lib/types";
 import type { LangCode } from "@/lib/socketEvents";
 
-type Phase = "lang-select" | "idle" | "calling" | "in-call" | "ended" | "rejected" | "no-staff" | "disconnected" | "staff-disconnected";
+type Phase = "lang-select" | "idle" | "calling" | "in-call" | "ended" | "rejected" | "no-staff" | "call-timeout" | "disconnected" | "staff-disconnected";
 
 // Error messages per language (U1/U2/U3)
-const ERR: Record<string, { noStaff: string; noStaffSub: string; disconnected: string; disconnectedSub: string; staffDisconnected: string; staffDisconnectedSub: string; serverDown: string }> = {
-  ja: { noStaff: "係員が不在です", noStaffSub: "しばらく後にもう一度お試しください。", disconnected: "接続が切れました", disconnectedSub: "ネットワークを確認して、もう一度お試しください。", staffDisconnected: "係員との接続が切れました", staffDisconnectedSub: "もう一度お呼び出しください。", serverDown: "サーバーに接続できません。ネットワークをご確認ください。" },
-  en: { noStaff: "No staff available", noStaffSub: "Please try again later.", disconnected: "Connection lost", disconnectedSub: "Please check your network and try again.", staffDisconnected: "Staff connection lost", staffDisconnectedSub: "Please call again.", serverDown: "Cannot connect to server. Please check your network." },
-  zh: { noStaff: "暂无工作人员", noStaffSub: "请稍后再试。", disconnected: "连接中断", disconnectedSub: "请检查网络并重试。", staffDisconnected: "与工作人员的连接中断", staffDisconnectedSub: "请再次呼叫。", serverDown: "无法连接到服务器，请检查网络。" },
-  "zh-TW": { noStaff: "暫無服務人員", noStaffSub: "請稍後再試。", disconnected: "連線中斷", disconnectedSub: "請檢查網路並重試。", staffDisconnected: "與服務人員的連線中斷", staffDisconnectedSub: "請再次呼叫。", serverDown: "無法連線到伺服器，請檢查網路。" },
-  ko: { noStaff: "담당자 부재 중", noStaffSub: "잠시 후 다시 시도해 주세요.", disconnected: "연결이 끊어졌습니다", disconnectedSub: "네트워크를 확인하고 다시 시도하세요.", staffDisconnected: "담당자와의 연결이 끊어졌습니다", staffDisconnectedSub: "다시 호출해 주세요.", serverDown: "서버에 연결할 수 없습니다. 네트워크를 확인하세요." },
-  fr: { noStaff: "Aucun agent disponible", noStaffSub: "Veuillez réessayer plus tard.", disconnected: "Connexion perdue", disconnectedSub: "Vérifiez votre réseau et réessayez.", staffDisconnected: "Connexion avec l'agent perdue", staffDisconnectedSub: "Veuillez rappeler.", serverDown: "Impossible de se connecter au serveur." },
-  es: { noStaff: "Sin personal disponible", noStaffSub: "Por favor, inténtelo más tarde.", disconnected: "Conexión perdida", disconnectedSub: "Verifique su red e inténtelo de nuevo.", staffDisconnected: "Se perdió la conexión con el agente", staffDisconnectedSub: "Por favor, vuelva a llamar.", serverDown: "No se puede conectar al servidor." },
-  th: { noStaff: "ไม่มีเจ้าหน้าที่", noStaffSub: "กรุณาลองใหม่ภายหลัง", disconnected: "การเชื่อมต่อขาดหาย", disconnectedSub: "กรุณาตรวจสอบเครือข่ายและลองใหม่", staffDisconnected: "การเชื่อมต่อกับเจ้าหน้าที่ขาดหาย", staffDisconnectedSub: "กรุณาโทรหาอีกครั้ง", serverDown: "ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้" },
+const ERR: Record<string, { noStaff: string; noStaffSub: string; busy: string; busySub: string; disconnected: string; disconnectedSub: string; staffDisconnected: string; staffDisconnectedSub: string; serverDown: string }> = {
+  ja: { noStaff: "係員が不在です", noStaffSub: "しばらく後にもう一度お試しください。", busy: "ただいま混み合っています", busySub: "しばらくたってから、もう一度お呼び出しください。", disconnected: "接続が切れました", disconnectedSub: "ネットワークを確認して、もう一度お試しください。", staffDisconnected: "係員との接続が切れました", staffDisconnectedSub: "もう一度お呼び出しください。", serverDown: "サーバーに接続できません。ネットワークをご確認ください。" },
+  en: { noStaff: "No staff available", noStaffSub: "Please try again later.", busy: "All staff are busy now", busySub: "Please try calling again in a little while.", disconnected: "Connection lost", disconnectedSub: "Please check your network and try again.", staffDisconnected: "Staff connection lost", staffDisconnectedSub: "Please call again.", serverDown: "Cannot connect to server. Please check your network." },
+  zh: { noStaff: "暂无工作人员", noStaffSub: "请稍后再试。", busy: "工作人员正忙", busySub: "请稍后再次呼叫。", disconnected: "连接中断", disconnectedSub: "请检查网络并重试。", staffDisconnected: "与工作人员的连接中断", staffDisconnectedSub: "请再次呼叫。", serverDown: "无法连接到服务器，请检查网络。" },
+  "zh-TW": { noStaff: "暫無服務人員", noStaffSub: "請稍後再試。", busy: "服務人員忙線中", busySub: "請稍後再次呼叫。", disconnected: "連線中斷", disconnectedSub: "請檢查網路並重試。", staffDisconnected: "與服務人員的連線中斷", staffDisconnectedSub: "請再次呼叫。", serverDown: "無法連線到伺服器，請檢查網路。" },
+  ko: { noStaff: "담당자 부재 중", noStaffSub: "잠시 후 다시 시도해 주세요.", busy: "지금은 담당자가 모두 응대 중입니다", busySub: "잠시 후 다시 호출해 주세요.", disconnected: "연결이 끊어졌습니다", disconnectedSub: "네트워크를 확인하고 다시 시도하세요.", staffDisconnected: "담당자와의 연결이 끊어졌습니다", staffDisconnectedSub: "다시 호출해 주세요.", serverDown: "서버에 연결할 수 없습니다. 네트워크를 확인하세요." },
+  fr: { noStaff: "Aucun agent disponible", noStaffSub: "Veuillez réessayer plus tard.", busy: "Tous les agents sont occupés", busySub: "Veuillez rappeler dans un instant.", disconnected: "Connexion perdue", disconnectedSub: "Vérifiez votre réseau et réessayez.", staffDisconnected: "Connexion avec l'agent perdue", staffDisconnectedSub: "Veuillez rappeler.", serverDown: "Impossible de se connecter au serveur." },
+  es: { noStaff: "Sin personal disponible", noStaffSub: "Por favor, inténtelo más tarde.", busy: "Todo el personal está ocupado", busySub: "Por favor, vuelva a llamar en unos minutos.", disconnected: "Conexión perdida", disconnectedSub: "Verifique su red e inténtelo de nuevo.", staffDisconnected: "Se perdió la conexión con el agente", staffDisconnectedSub: "Por favor, vuelva a llamar.", serverDown: "No se puede conectar al servidor." },
+  th: { noStaff: "ไม่มีเจ้าหน้าที่", noStaffSub: "กรุณาลองใหม่ภายหลัง", busy: "ขณะนี้เจ้าหน้าที่ไม่ว่าง", busySub: "กรุณาเรียกอีกครั้งในภายหลัง", disconnected: "การเชื่อมต่อขาดหาย", disconnectedSub: "กรุณาตรวจสอบเครือข่ายและลองใหม่", staffDisconnected: "การเชื่อมต่อกับเจ้าหน้าที่ขาดหาย", staffDisconnectedSub: "กรุณาโทรหาอีกครั้ง", serverDown: "ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้" },
 };
 
 // 通話中の画面に出す文言。お客様が選んだ言語で表示する（日本語は翻訳が入らないので
@@ -598,6 +598,15 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       setTimeout(() => setPhase("idle"), 5000);
     });
 
+    s.on("call:timeout", () => {
+      // 係員は在席しているが、誰も応答しないまま打ち切り時間が過ぎた。
+      // お客様を無期限に待たせず「混み合っています」を出して待機画面へ戻す。
+      setSessionId(null);
+      sessionIdRef.current = null;
+      setPhase("call-timeout");
+      setTimeout(() => setPhase("idle"), 5000);
+    });
+
     s.on("call:rejected", () => {
       // Staff declined — show message briefly then return to lang-select
       setPhase("rejected");
@@ -747,6 +756,19 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         </div>
         <p className="text-white text-2xl font-bold text-center">{errMsg.noStaff}</p>
         <p className="text-blue-300 text-base text-center">{errMsg.noStaffSub}</p>
+      </div>
+    );
+  }
+
+  // --- 未応答タイムアウト（係員は在席だが応答が無いまま打ち切り） ---
+  if (phase === "call-timeout") {
+    return (
+      <div className="min-h-screen bg-blue-900 flex flex-col items-center justify-center gap-6 p-8">
+        <div className="w-24 h-24 rounded-full bg-orange-500/20 flex items-center justify-center">
+          <span className="text-5xl">⏳</span>
+        </div>
+        <p className="text-white text-2xl font-bold text-center">{errMsg.busy}</p>
+        <p className="text-blue-300 text-base text-center">{errMsg.busySub}</p>
       </div>
     );
   }

@@ -474,6 +474,12 @@ export default function StaffPage() {
       addToast(`${payload.machineName}のユーザーとの接続が切れました`, "error");
     });
 
+    // 未応答タイムアウト: 誰も応答しないまま呼び出しが打ち切られた。着信カードは
+    // call:taken で消えるため、ここでは「取り逃した」ことだけ知らせる。
+    s.on("call:missed", (payload: { sessionId: string; machineName: string; timeoutSeconds: number }) => {
+      addToast(`${payload.machineName}の呼び出しに応答できないまま終了しました（${payload.timeoutSeconds}秒経過）`, "error");
+    });
+
     // 音声合成に失敗した。係員の画面には自分の発言が普通に出るため、知らせないと
     // 「伝わった」と思ったまま進んでしまう。お客様側には文字だけ出している。
     s.on("error:tts", (payload: { sessionId: string; partial: boolean; reason?: string }) => {
