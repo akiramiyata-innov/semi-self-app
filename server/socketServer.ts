@@ -434,6 +434,65 @@ export function stripFillers(text: string): string {
 }
 
 /**
+ * 記号・単位の読み。音声認識は「10°c」「100m」のように記号のまま書き出すので、
+ * そのまま読ませると読み方が定まらない。数字が直前にある場合だけ置き換える
+ * （英単語の中の m や c に反応させないため）。長い単位から先に見る。
+ */
+const SYMBOL_RULES: Array<[RegExp, string]> = [
+  [/(\d),(?=\d{3}(?!\d))/g, "$1"],                       // 1,200 → 1200（読点として読まれるのを防ぐ）
+  [/(\d{1,2}):(\d{2})(?!\d)/g, "$1時$2分"],               // 10:30 → 10時30分
+  [/(\d+(?:\.\d+)?)\s*(?:℃|°\s*[cC])/g, "$1度"],          // 10°c / 10℃ → 10度
+  [/(\d+(?:\.\d+)?)\s*°(?![a-zA-Z])/g, "$1度"],
+  [/(\d+(?:\.\d+)?)\s*km(?![a-zA-Z])/g, "$1キロメートル"],
+  [/(\d+(?:\.\d+)?)\s*mm(?![a-zA-Z])/g, "$1ミリメートル"],
+  [/(\d+(?:\.\d+)?)\s*cm(?![a-zA-Z])/g, "$1センチメートル"],
+  [/(\d+(?:\.\d+)?)\s*kg(?![a-zA-Z])/g, "$1キログラム"],
+  [/(\d+(?:\.\d+)?)\s*m(?![a-zA-Z])/g, "$1メートル"],
+  [/(\d+(?:\.\d+)?)\s*[%％]/g, "$1パーセント"],
+  [/(\d)\s*[〜～~]\s*(?=\d)/g, "$1から"],                  // 3〜5 → 3から5
+];
+
+export function normalizeSymbols(text: string): string {
+  let out = text;
+  for (const [re, to] of SYMBOL_RULES) out = out.replace(re, to);
+  return out;
+}
+
+/**
+ * 区切りが1つも無い発話に読点を入れる。
+ *
+ * 実際の会話のように続けて話すと、音声認識が句読点ではなく**空白**で区切ることがある
+ * （実ログで確認）。そのままだと読み上げが一本調子になるため、空白を読点に置き換える。
+ * すでに句読点がある文には触らない。
+ *
+ * 空白が1つだけの文は対象外にする。「10°c ほど」のように記号のあとに紛れ込んだ
+ * 空白であることが多く、そこに読点を入れると「10度、ほど」と不自然になるため。
+ * 同じ理由で、助詞・接尾辞で始まる語の前にも読点を入れない。英数字どうしの間
+ * （英単語の並び）も、読点にすると細切れになるので空白のまま残す。
+ */
+const NO_PAUSE_BEFORE = /^(?:ほど|まで|から|など|くらい|ぐらい|ずつ|程度|以上|以内|以下|ほか)/;
+
+export function addPauses(text: string): string {
+  if (/[。、．，！？!?]/.test(text)) return text;
+  const parts = text.trim().split(/[\s　]+/).filter(Boolean);
+  if (parts.length < 3) return text; // 空白1つだけの文は触らない
+  let out = parts[0];
+  for (let i = 1; i < parts.length; i++) {
+    const prev = out[out.length - 1];
+    const next = parts[i][0];
+    const bothLatin = /[A-Za-z0-9]/.test(prev) && /[A-Za-z0-9]/.test(next);
+    const keepFlowing = bothLatin || NO_PAUSE_BEFORE.test(parts[i]);
+    out += (keepFlowing ? " " : "、") + parts[i];
+  }
+  return out + "。";
+}
+
+/** 読み上げ・翻訳に渡す文を作る。画面表示と通話ログは元の文のまま。 */
+export function toSpokenText(text: string): string {
+  return addPauses(normalizeSymbols(stripFillers(text)));
+}
+
+/**
  * 読み上げ用に、英字を含む登録語をその「よみ」へ置き換える（画面表示は変えない）。
  *
  * 日本語の読み上げに英大文字が来ると、音声は「ひとつの単語（すいか）」と「頭文字の略語
@@ -846,9 +905,9 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         }
 
         let translationFailed = false;
-        // 翻訳と読み上げにはフィラーを落とした文を使う。係員画面の表示と通話ログは
-        // 原文（text）のままなので、係員が言ったことは残る。
-        const spoken = stripFillers(text);
+        // 翻訳と読み上げには、つなぎ言葉を落とし記号を読みに直した文を使う。
+        // 係員画面の表示と通話ログは原文（text）のままなので、係員が言ったことは残る。
+        const spoken = toSpokenText(text);
         if (userLang !== "ja") {
           try {
             translatedText = await translateWithGlossary(spoken, "ja", userLang);
