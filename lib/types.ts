@@ -63,3 +63,18 @@ export interface SessionSummary {
   durationSeconds: number;
   messageCount: number;
 }
+
+/**
+ * 障害履歴の1件。トースト通知（4秒で消える）やサーバーログ（管理画面から見えない）
+ * にしか残らなかった異常を、管理画面 /admin/errors で後から確認できるようにする。
+ */
+export interface AppErrorEntry {
+  /** 発生時刻（エポックms） */
+  at: number;
+  /** 種類（translate / tts-synthesis / tts-playback / logsave / mic-user / call-timeout / stt-guard-* / stt-stream） */
+  type: string;
+  sessionId?: string;
+  machineName?: string;
+  /** 人が読む詳細（エラー内容・しきい値・対象テキストなど） */
+  detail?: string;
+}

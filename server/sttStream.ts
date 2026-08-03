@@ -7,6 +7,7 @@ import { buildReadingMap, applyReadingMatch, warmUpTokenizer, SUFFIX_KANJI, type
 import { noteSttSpeech, noteSttFinal } from "./metrics";
 import { SilenceGate, chunkRms, SPEECH_RMS, MIN_SPEECH_CHUNKS } from "./silenceGate";
 import { inspectGlossaryDump } from "./glossaryDump";
+import { recordAppError } from "./errorLog";
 
 // Google streaming recognition has a per-stream time limit. Reopen the stream
 // before then so long (2 min+) speech continues seamlessly.
@@ -180,17 +181,20 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
         const verdict = gate.onFinal();
         if (!verdict.accept) {
           console.log(`[stt-gate] 無音区間のため破棄 speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)} raw=${JSON.stringify(raw)}`);
+          recordAppError({ type: "stt-guard-gate", detail: `無音区間の認識結果を破棄（幻聴とみなした）: "${raw.slice(0, 60)}" speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)}` });
           return;
         }
         // 用語集オウム返しガード：ヒント一覧をそのまま読み上げた形の暴走出力は破棄する。
         const dump = inspectGlossaryDump(base, phrases);
         if (dump.isDump) {
           console.log(`[stt-dump] 用語集の羅列とみなし破棄 hits=${dump.hits} other=${dump.otherRatio.toFixed(2)} raw=${JSON.stringify(raw)}`);
+          recordAppError({ type: "stt-guard-dump", detail: `用語集の羅列とみなし破棄: "${raw.slice(0, 60)}" hits=${dump.hits}` });
           return;
         }
         // 暴走出力ガード：数字の連番のような同種文字の羅列は幻聴（自信度も高く出るため先に判定）。
         if (isDegenerateRun(base)) {
           console.log(`[stt-run] 連番・繰り返しの暴走とみなし破棄 raw=${JSON.stringify(raw.slice(0, 60))}${raw.length > 60 ? "…" : ""}`);
+          recordAppError({ type: "stt-guard-run", detail: `連番・繰り返しの暴走とみなし破棄: "${raw.slice(0, 60)}"` });
           return;
         }
         // 自信度ガード：ささやき・息・衣擦れ等の「続く音」は無音ゲートを通るため、
@@ -199,6 +203,7 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
         const confidence = r.alternatives?.[0]?.confidence ?? null;
         if (confidence != null && confidence > 0 && confidence < MIN_CONFIDENCE) {
           console.log(`[stt-conf] 自信度が低いため破棄 confidence=${confidence.toFixed(3)} raw=${JSON.stringify(raw)}`);
+          recordAppError({ type: "stt-guard-conf", detail: `自信度が低いため破棄（幻聴とみなした）: "${raw.slice(0, 60)}" confidence=${confidence.toFixed(3)}` });
           return;
         }
         // 確定時のみ、読み照合（kuromoji）で同音の別漢字も矯正する。
@@ -229,6 +234,7 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
         void openStream();
       } else {
         socket.emit("stt:error", { message: err.message });
+        recordAppError({ type: "stt-stream", detail: `音声認識の接続エラーが連続し停止: ${err.message.slice(0, 120)}` });
       }
     });
     // First message: recognizer + streaming config. Subsequent writes are audio.

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { io, Socket } from "socket.io-client";
-import { Wifi, WifiOff, Monitor, Mic, ClipboardList, Users, ChevronDown, Mail, LogOut, MapPin, KeyRound, BookOpen, Map as MapIcon, MessageSquare, Download } from "lucide-react";
+import { Wifi, WifiOff, Monitor, Mic, ClipboardList, Users, ChevronDown, Mail, LogOut, MapPin, KeyRound, BookOpen, Map as MapIcon, MessageSquare, Download, AlertTriangle } from "lucide-react";
 import { CallQueueItem } from "@/components/CallQueueItem";
 import { ActiveCallPanel } from "@/components/ActiveCallPanel";
 import { Toast } from "@/components/Toast";
@@ -1082,6 +1082,13 @@ export default function StaffPage() {
                             className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
                           >
                             <MapIcon size={15} className="text-gray-400" /> 駅マスター登録
+                          </Link>
+                          <Link
+                            href="/admin/errors"
+                            onClick={() => setShowAccountMenu(false)}
+                            className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            <AlertTriangle size={15} className="text-gray-400" /> 障害履歴
                           </Link>
                           {GLOSSARY_ADMIN_ENABLED ? (
                             <Link

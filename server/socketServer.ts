@@ -10,6 +10,7 @@ import type { TranscriptEntry, SessionLog } from "../lib/types";
 import { isGCSEnabled, uploadLog } from "../lib/gcsClient";
 import { getGlossaryTermsFresh } from "../lib/glossaryClient";
 import { getAssignmentsFresh } from "../lib/assignmentClient";
+import { recordAppError } from "./errorLog";
 import type { GlossaryTerm } from "../lib/types";
 import { registerSttHandlers } from "./sttStream";
 import { verifySessionToken, SESSION_COOKIE_NAME } from "../lib/session";
@@ -150,6 +151,7 @@ async function saveSessionLog(session: ActiveSession): Promise<void> {
     }
     // 黙って欠けると性能テストの記録が失われるので係員へ知らせる。
     io.to(session.staffSocketId).emit("error:logSave", { sessionId: session.sessionId });
+    recordAppError({ type: "logsave", sessionId: session.sessionId, machineName: session.machineName, detail: "GCSへ保存できず（再試行も失敗）。サーバー内へ退避を試みた" });
     return;
   }
 
@@ -159,6 +161,7 @@ async function saveSessionLog(session: ActiveSession): Promise<void> {
   } catch (e) {
     console.error("[log] failed to save session log:", e);
     io.to(session.staffSocketId).emit("error:logSave", { sessionId: session.sessionId });
+    recordAppError({ type: "logsave", sessionId: session.sessionId, machineName: session.machineName, detail: `通話ログを保存できなかった: ${String(e).slice(0, 120)}` });
   }
 }
 
@@ -754,6 +757,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           timeoutSeconds: Math.round(CALL_TIMEOUT_MS / 1000),
         });
         console.log(`[call] 未応答のため打ち切り: ${pending.machineName} (${sessionId}, ${CALL_TIMEOUT_MS}ms)`);
+        recordAppError({ type: "call-timeout", sessionId, machineName: pending.machineName, detail: `${Math.round(CALL_TIMEOUT_MS / 1000)}秒間 応答が無く呼び出しを打ち切った` });
       }, CALL_TIMEOUT_MS));
     });
 
@@ -863,6 +867,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           } catch (e) {
             console.error("[speech:user] translation error:", e);
             translationFailed = true;
+            recordAppError({ type: "translate", sessionId, machineName: session.machineName, detail: `お客様の発言を翻訳できなかった（${lang}→日本語）: ${String(e).slice(0, 120)}` });
             io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "userToJa" });
           }
         }
@@ -957,6 +962,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           } catch (e) {
             console.error("[speech:staff] translation error:", e);
             translationFailed = true;
+            recordAppError({ type: "translate", sessionId, machineName: session.machineName, detail: `係員の発言を翻訳できなかった（日本語→${userLang}）: ${String(e).slice(0, 120)}` });
             io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "jaToUser" });
             translatedText = text; // fallback: send Japanese text as-is
           }
@@ -995,6 +1001,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           const partial = audioBase64.length > 0;
           io.to(session.staffSocketId).emit("error:tts", { sessionId, partial, reason: "synthesis" });
           console.error(`[tts] 音声を届けられなかった session=${sessionId} partial=${partial}`);
+          recordAppError({ type: "tts-synthesis", sessionId, machineName: session.machineName, detail: `${partial ? "一部の" : ""}音声を合成できず文字のみ表示: ${text.slice(0, 60)}` });
         }
 
         session.transcript.push({
@@ -1091,6 +1098,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         reason: "playback",
       });
       console.error(`[tts] お客様の端末で再生できなかった session=${payload.sessionId}`);
+      recordAppError({ type: "tts-playback", sessionId: payload.sessionId, machineName: session.machineName, detail: "お客様の端末で音声を再生できなかった（文字のみ表示）" });
     });
 
     // ── お客様側のマイク異常 ──────────────────────────────────────────────────
@@ -1104,6 +1112,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         code: payload.code,
       });
       console.log(`[mic] お客様側のマイク異常 session=${payload.sessionId} code=${payload.code ?? "解消"}`);
+      if (payload.code) recordAppError({ type: "mic-user", sessionId: payload.sessionId, machineName: session.machineName, detail: `お客様側のマイク異常: ${payload.code}` });
     });
 
     // ── Disconnect cleanup ────────────────────────────────────────────────────
