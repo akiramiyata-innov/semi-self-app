@@ -18,6 +18,11 @@ interface ActiveCallPanelProps {
   userCameraFaceFrame?: string | null;
   isCapturing: boolean;
   isListening: boolean;
+  /**
+   * Space キーでマイクを操作できる状態か。2件同時通話中と画面共有中は false になり、
+   * マイクボタンの「[Space]」表示を消す（使えないのに使えるように見えるのを防ぐ）。
+   */
+  spaceShortcut?: boolean;
   micError?: string | null;
   onToggleMic: () => void;
   onToggleScreenShare: () => void;
@@ -59,6 +64,7 @@ export function ActiveCallPanel({
   userCameraFaceFrame,
   isCapturing,
   isListening,
+  spaceShortcut = true,
   micError,
   onToggleMic,
   onToggleScreenShare,
@@ -178,11 +184,15 @@ export function ActiveCallPanel({
                 ? "bg-red-500 text-white hover:bg-red-600 ring-2 ring-red-300"
                 : "bg-gray-200 text-gray-600 hover:bg-gray-300"
             }`}
-            title={isListening ? "マイクOFF (Space)" : "マイクON (Space)"}
+            title={
+              spaceShortcut
+                ? (isListening ? "マイクOFF (Space)" : "マイクON (Space)")
+                : (isListening ? "マイクOFF" : "マイクON")
+            }
           >
             {isListening ? <Mic size={14} /> : <MicOff size={14} />}
             {isListening ? "マイクON" : "マイクOFF"}
-            <span className="text-[10px] opacity-50 ml-0.5">[Space]</span>
+            {spaceShortcut && <span className="text-[10px] opacity-50 ml-0.5">[Space]</span>}
           </button>
           <button
             onClick={onToggleScreenShare}

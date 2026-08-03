@@ -757,7 +757,15 @@ export default function StaffPage() {
   useEffect(() => { startMicRef.current = startMic; }, [startMic]);
   const stopMicRef = useRef(stopMic);
   useEffect(() => { stopMicRef.current = stopMic; }, [stopMic]);
+  const capturingRef = useRef(capturing);
+  useEffect(() => { capturingRef.current = capturing; }, [capturing]);
   const pttActiveRef = useRef(false); // Space プッシュ・トゥ・トークがマイクを開始したか
+
+  // Space を受け付けない状況。この間はマイクボタンだけで操作する。
+  //  ・2件同時通話: Space は「先に応答した通話」にしか向かわず、2件目には向けられない
+  //  ・画面共有中: 共有先のウィンドウを触るとキー入力がそちらへ行き、Space が届かない
+  // どちらも「効いたり効かなかったり」に見えて紛らわしいので、操作方法を1つに絞る。
+  const spaceDisabled = activeSessions.size >= 2 || capturing;
 
   // Space = プッシュ・トゥ・トーク：押している間だけマイクON、離すとOFF。
   // マイクボタンは従来通りクリックでON/OFFトグル（toggleMic）。両者は独立して動く。
@@ -778,6 +786,12 @@ export default function StaffPage() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code !== "Space" || inField(e.target)) return;
       e.preventDefault();
+      // 2件同時通話中・画面共有中は Space では操作しない（マイクボタンだけを使う）。
+      // preventDefault は先に済ませてあるので、ここで抜ければ Space は完全に無反応になる
+      // （フォーカス中のボタンが Space で押される、画面がスクロールする、も起きない）。
+      // キーを離す側（handleKeyUp）は塞がない：押している最中に2件目に応答した場合でも
+      // 確実にマイクを止めるため。
+      if (activeSessionsRef.current.size >= 2 || capturingRef.current) return;
       // ボタンにフォーカスが残っていると、Space がそのボタンの「クリック」として扱われ、
       // マイクボタンが勝手に押される（→ Spaceが効かなくなる）。フォーカスを外して防ぐ。
       if (document.activeElement instanceof HTMLElement && document.activeElement.tagName === "BUTTON") {
@@ -1304,6 +1318,7 @@ export default function StaffPage() {
                   interimStaffText={session.interimStaffText}
                   userCameraFaceFrame={session.userCameraFaceFrame}
                   isListening={isListening}
+                  spaceShortcut={!spaceDisabled}
                   isCapturing={capturing && captureSessionRef.current === session.sessionId}
                   micError={micError ? MIC_ERR_JA[micError] : null}
                   quickReplies={quickReplies}
