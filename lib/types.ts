@@ -71,7 +71,7 @@ export interface SessionSummary {
 export interface AppErrorEntry {
   /** 発生時刻（エポックms） */
   at: number;
-  /** 種類（translate / tts-synthesis / tts-playback / logsave / mic-user / call-timeout / stt-guard-* / stt-stream） */
+  /** 種類（translate / tts-synthesis / tts-playback / logsave / mic-user / call-timeout / disconnect / stt-guard-* / stt-stream） */
   type: string;
   sessionId?: string;
   machineName?: string;

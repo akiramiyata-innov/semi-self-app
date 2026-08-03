@@ -13,6 +13,7 @@ const TYPE_LABELS: Record<string, { label: string; color: string }> = {
   "logsave": { label: "ログ保存失敗", color: "bg-red-100 text-red-700" },
   "mic-user": { label: "お客様マイク異常", color: "bg-orange-100 text-orange-700" },
   "call-timeout": { label: "呼び出し未応答", color: "bg-orange-100 text-orange-700" },
+  "disconnect": { label: "接続切断", color: "bg-orange-100 text-orange-700" },
   "stt-stream": { label: "音声認識の接続エラー", color: "bg-red-100 text-red-700" },
   "stt-guard-gate": { label: "認識ガード（無音）", color: "bg-gray-100 text-gray-600" },
   "stt-guard-dump": { label: "認識ガード（用語集羅列）", color: "bg-gray-100 text-gray-600" },
@@ -53,7 +54,7 @@ export default function ErrorsPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">障害履歴</h1>
             <p className="text-sm text-gray-500 mt-1">
-              通話中に起きた異常の記録（最新500件・通知が消えた後もここで確認できます）
+              呼び出し中・通話中に起きた異常の記録（最新500件・通知が消えた後もここで確認できます）
             </p>
           </div>
           <div className="flex gap-2">

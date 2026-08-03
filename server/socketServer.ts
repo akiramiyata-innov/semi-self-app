@@ -208,6 +208,24 @@ function releaseSession(sessionId: string, staffSocketId: string): void {
   }
 }
 
+// ── 切断の記録 ────────────────────────────────────────────────────────────────
+/**
+ * Socket.IO が渡す切断理由を、管理画面で読める日本語にする。**通信が途絶えたのか
+ * 画面を閉じたのかで対処が変わる**ため（前者は回線・電波、後者は操作）。未知の理由は
+ * そのまま出す（ライブラリ側の追加に耐える）。
+ */
+function disconnectReasonJa(reason: string): string {
+  switch (reason) {
+    case "ping timeout": return "応答が途絶えた（通信断とみられる）";
+    case "transport close": return "接続が閉じられた（画面を離れた・通信断）";
+    case "transport error": return "通信エラー";
+    case "client namespace disconnect": return "端末側から切断";
+    case "server namespace disconnect": return "サーバー側から切断";
+    case "server shutting down": return "サーバーの停止・再起動";
+    default: return reason;
+  }
+}
+
 // ── 係員画面の「お客様発話中」 ────────────────────────────────────────────────
 // 待っている側に相手の様子を伝えるための表示。点灯は音量（実際に声が出ているか）で
 // 判断し、消すのは確定テキストが出たとき。マイクのON/OFF状態には依存しない。
@@ -1116,7 +1134,9 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     });
 
     // ── Disconnect cleanup ────────────────────────────────────────────────────
-    socket.on("disconnect", () => {
+    socket.on("disconnect", (reason: string) => {
+      // 係員の名前は障害履歴に残すので、staffMap から消す前に控える。
+      const staffName = staffMap.get(socket.id)?.name;
       staffMap.delete(socket.id);
       metrics.clearSttSocket(socket.id);
 
@@ -1124,6 +1144,17 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         if (session.staffSocketId === socket.id || session.userSocketId === socket.id) {
           // 通話中の切断＝性能指標。ログ保存より前に記録する（保存時に取り出すため）。
           metrics.noteDisconnect(sessionId);
+          // 障害履歴にも残す。画面の通知はその場限りで消えるため、後から
+          // 「誰が・どの通話で・通話中だったか」を追えるようにする。
+          const who = session.userSocketId === socket.id
+            ? "お客様"
+            : `係員（${staffName ?? "名前不明"}）`;
+          recordAppError({
+            type: "disconnect",
+            sessionId,
+            machineName: session.machineName,
+            detail: `通話中に${who}の接続が切れた: ${disconnectReasonJa(reason)}`,
+          });
           saveSessionLog(session).catch((e) => console.error("[log] disconnect save error:", e));
 
           // If user disconnected, free the staff member
@@ -1151,6 +1182,14 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
       callQueue.forEach((record, sessionId) => {
         if (record.userSocketId === socket.id) {
+          // 呼び出し中（まだ誰も応答していない）お客様の切断。通話中の切断とは
+          // 意味が違う（応答が遅い・お客様が待ちきれず離れた の手がかりになる）。
+          recordAppError({
+            type: "disconnect",
+            sessionId,
+            machineName: record.machineName,
+            detail: `呼び出し中（応答前）にお客様の接続が切れた: ${disconnectReasonJa(reason)}`,
+          });
           callQueue.delete(sessionId);
           clearCallTimeout(sessionId);
           io.to("call-queue").emit("call:taken", { sessionId });
