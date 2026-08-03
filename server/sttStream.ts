@@ -13,6 +13,15 @@ import { inspectGlossaryDump } from "./glossaryDump";
 const STREAM_RESTART_MS = 4.5 * 60 * 1000;
 // V2 model adaptation caps the phrase boost at 20 (higher → INVALID_ARGUMENT).
 const BOOST = 20;
+// 幻聴対策の第3層: モデル自身の「自信度」が低い確定は破棄する。
+// 無音ゲート（音量）では、ささやき・息・衣擦れのような「続く音」を本物の小声と
+// 区別できない（小声を守るため通すしかない）。その先の見分けは内容側で行う。
+// 実測（2026-08-03・chirp_2・TTS音声）: 実発話はほぼ聞こえない音量(3%)でも 0.91〜0.97、
+// 雑音からの創作は 0.67〜0.88（0.88は用語集オウム返し型＝別ガードが破棄。すり抜ける
+// 「登録語の引き寄せ」型が 0.67）。0.75 は両者のほぼ中間で、どちらにも余裕がある。
+// 騒音下の実発話の自信度は未測定のため環境変数で調整可能にし、[stt-diag] に
+// confidence を常時記録して実運用データで見直せるようにしている。
+const MIN_CONFIDENCE = Number(process.env.STT_MIN_CONFIDENCE ?? "0.75");
 
 type SpeechStream = ReturnType<v2.SpeechClient["_streamingRecognize"]>;
 
@@ -20,7 +29,7 @@ type SpeechStream = ReturnType<v2.SpeechClient["_streamingRecognize"]>;
 interface StreamingResult {
   results?: Array<{
     isFinal?: boolean | null;
-    alternatives?: Array<{ transcript?: string | null }> | null;
+    alternatives?: Array<{ transcript?: string | null; confidence?: number | null }> | null;
   }> | null;
 }
 
@@ -81,6 +90,19 @@ function buildCaseRules(terms: GlossaryTerm[]): CaseRule[] {
     rules.push({ re: new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, "gi"), to: ja });
   }
   return rules;
+}
+
+/**
+ * 連番・繰り返しの「暴走出力」判定。ノイズを与えると chirp 系は「1234567891011…」の
+ * ような同種の文字の羅列を出すことがある（実測: 息・衣擦れ風ノイズから数字177文字の
+ * 連番が自信度0.98で出た＝自信度ガードでは捕まらない）。実際の発話は漢字・かな交じりで
+ * 文字の種類が豊かなので、「約物・空白を除いて20文字以上なのに文字種が10種以下」を
+ * 暴走とみなして破棄する（数字の連番＝文字種は最大10種。普通の20文字の文は17種前後）。
+ */
+export function isDegenerateRun(text: string): boolean {
+  const core = text.replace(/[\s、。,.．・]/g, "");
+  if (core.length < 20) return false;
+  return new Set(core).size <= 10;
 }
 
 /**
@@ -166,19 +188,33 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
           console.log(`[stt-dump] 用語集の羅列とみなし破棄 hits=${dump.hits} other=${dump.otherRatio.toFixed(2)} raw=${JSON.stringify(raw)}`);
           return;
         }
+        // 暴走出力ガード：数字の連番のような同種文字の羅列は幻聴（自信度も高く出るため先に判定）。
+        if (isDegenerateRun(base)) {
+          console.log(`[stt-run] 連番・繰り返しの暴走とみなし破棄 raw=${JSON.stringify(raw.slice(0, 60))}${raw.length > 60 ? "…" : ""}`);
+          return;
+        }
+        // 自信度ガード：ささやき・息・衣擦れ等の「続く音」は無音ゲートを通るため、
+        // その先はモデルの自信度で見分ける（実発話は極小音量でも0.91以上・幻聴は0.67〜）。
+        // 自信度が無い/0のときは破棄しない（モデルや言語により返さない場合の安全側）。
+        const confidence = r.alternatives?.[0]?.confidence ?? null;
+        if (confidence != null && confidence > 0 && confidence < MIN_CONFIDENCE) {
+          console.log(`[stt-conf] 自信度が低いため破棄 confidence=${confidence.toFixed(3)} raw=${JSON.stringify(raw)}`);
+          return;
+        }
         // 確定時のみ、読み照合（kuromoji）で同音の別漢字も矯正する。
         const transcript = await applyReadingMatch(base, readingMap);
-        // ── 診断ログ（用語集語の誤挿入調査＋無音ゲートしきい値調整）─────────
+        // ── 診断ログ（用語集語の誤挿入調査＋各ガードのしきい値調整）─────────
         // 生の認識結果(raw)→かな漢字補正(corrected)→読み照合(final)を段階で記録。
         // 話していない登録語が混入した場合、それが raw の時点で入っているか（＝モデル側か
-        // 後処理側か）を切り分けるためのログ。動作は変えず記録するだけ（調査後に削除可）。
-        console.log(`[stt-diag] speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)} raw=${JSON.stringify(raw)} corrected=${JSON.stringify(base)} final=${JSON.stringify(transcript)}`);
+        // 後処理側か）を切り分けるためのログ。confidence は自信度ガードの調整用に常時記録。
+        console.log(`[stt-diag] speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)} conf=${confidence == null ? "-" : confidence.toFixed(3)} raw=${JSON.stringify(raw)} corrected=${JSON.stringify(base)} final=${JSON.stringify(transcript)}`);
         socket.emit("stt:final", { transcript });
         noteSttFinal(socket.id); // 性能測定：発話終了→確定テキスト
       } else {
         // interim（入力中プレビュー）も同じ基準で抑止し、幻聴の「打ちかけ表示」を防ぐ
         if (!gate.hasSpeech()) return;
         if (inspectGlossaryDump(base, phrases).isDump) return;
+        if (isDegenerateRun(base)) return;
         socket.emit("stt:interim", { transcript: base });
       }
     });
