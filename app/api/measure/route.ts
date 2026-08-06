@@ -60,7 +60,9 @@ function toCsv(logs: SessionLog[]): string {
     const note = [
       log.machineName ?? "",
       log.userLang ?? "",
-      new Date(log.startedAt).toLocaleString("ja-JP"),
+      // ★時間帯を明示する。指定しないとサーバーの時間帯（本番のRailwayはUTC）で
+      // 書かれてしまい、日本時間より9時間ずれる（日付までずれる）。
+      new Date(log.startedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }),
       m ? `STT計測${m.sttFinalDelaysMs?.length ?? 0}回/TTS計測${m.ttsDelaysMs?.length ?? 0}回` : "測定値なし(旧ログ)",
     ].filter(Boolean).join(" / ");
     rows.push([

@@ -91,7 +91,8 @@ for (const log of logs) {
   const note = [
     log.machineName ?? "",
     log.userLang ?? "",
-    new Date(log.startedAt).toLocaleString("ja-JP"),
+    // 時間帯を明示する（実行する端末の設定に左右されないように）。/api/measure と同じ。
+    new Date(log.startedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }),
     m ? `STT計測${m.sttFinalDelaysMs?.length ?? 0}回/TTS計測${m.ttsDelaysMs?.length ?? 0}回` : "測定値なし(旧ログ)",
     m && max(m.sttFinalDelaysMs) !== null ? `STT最大${sec(max(m.sttFinalDelaysMs))}s` : "",
     m && max(m.ttsDelaysMs) !== null ? `TTS最大${sec(max(m.ttsDelaysMs))}s` : "",

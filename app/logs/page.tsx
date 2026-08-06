@@ -9,6 +9,8 @@ import type { SessionLog, SessionSummary } from "@/lib/types";
 
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleString("ja-JP", {
+    // 時間帯を明示する（見ている端末の設定に左右されず、常に日本時間で表示する）。
+    timeZone: "Asia/Tokyo",
     year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit",
   });
