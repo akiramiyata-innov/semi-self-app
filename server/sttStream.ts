@@ -136,6 +136,17 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
   const gate = new SilenceGate();
   // 「お客様発話中」表示用：発話音量が連続したチャンク数（0.2秒＝2チャンク続いたら通知）
   let voiceRun = 0;
+  /**
+   * ストリームが開くまでの音声を貯めておく置き場。
+   *
+   * **マイクONの直後に話し始めると、話し出しが欠けていた**（実測: 「馬喰横山まで…」が
+   * 「黒横山まで…」になる）。stt:start を受けてから Google のストリームが開くまでには
+   * 用語集の取得やストリームの確立で待ち時間があり、その間に届いた音声を捨てていたため。
+   * 捨てずに貯めておき、開いた直後に先頭から流し込む。
+   */
+  let pendingAudio: Buffer[] = [];
+  /** 貯める上限（100チャンク＝10秒）。異常時にメモリを食い続けないための歯止め。 */
+  const PENDING_MAX = 100;
 
   /** 認識結果のカナ読みを、登録された漢字に置き換える（chirp_2 が漢字化しきれない語の後処理）。 */
   function applyCorrections(text: string): string {
@@ -248,6 +259,15 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
     // First message: recognizer + streaming config. Subsequent writes are audio.
     s.write({ recognizer: RECOGNIZER, streamingConfig: { config, streamingFeatures: { interimResults: true } } });
     stream = s;
+    // 開くまでに届いていた音声を、届いた順に流し込む（話し出しの欠けを防ぐ）。
+    if (pendingAudio.length) {
+      const waiting = pendingAudio;
+      pendingAudio = [];
+      for (const buf of waiting) {
+        try { s.write({ audio: buf }); } catch { /* stream closing */ }
+      }
+      console.log(`[stt] 開通までに届いた音声 ${waiting.length} チャンク(${(waiting.length / 10).toFixed(1)}秒)を送出`);
+    }
   }
 
   function scheduleRestart(): void {
@@ -263,6 +283,7 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
 
   function stopStream(): void {
     running = false;
+    pendingAudio = []; // 次にONにしたとき、前回の言い残しが混ざらないように捨てる
     if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
     const s = stream;
     stream = null;
@@ -271,26 +292,35 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
 
   socket.on("stt:start", async (payload?: { lang?: string }) => {
     lang = payload?.lang || "ja-JP";
+    // ★「受け入れ開始」の印は、待ち時間の入る処理より**先**に立てる。
+    //   用語集の取得を待ってからにすると、その間に届いた音声が捨てられてしまう。
+    running = true;
+    consecutiveErrors = 0;
+    gate.reset();      // マイクON時に音量計測をやり直す
+    pendingAudio = [];
     const terms = await getGlossaryTermsFresh().catch(() => [] as GlossaryTerm[]);
     phrases = terms.map((t) => t.ja).filter(Boolean);
     corrections = buildCorrections(terms);
     caseRules = buildCaseRules(terms);
     readingMap = buildReadingMap(terms);
     warmUpTokenizer(); // 辞書ロードを先行させ、初回の確定までに準備を整える
-    running = true;
-    consecutiveErrors = 0;
-    gate.reset(); // マイクON時に音量計測をやり直す
     await openStream();
     scheduleRestart();
   });
 
   socket.on("stt:audio", (chunk: ArrayBuffer | Buffer) => {
-    if (!stream) return;
+    // running=false（マイクOFF中）の音声だけは捨てる。ストリームがまだ開いていない
+    // 場合は捨てずに貯めて、開いた直後に送る（話し出しの欠け対策）。
+    if (!running) return;
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     // 音声の転送を最優先（音量測定に万一問題があっても認識用の音声は絶対に欠けさせない）
-    try {
-      stream.write({ audio: buf });
-    } catch { /* stream closing */ }
+    if (stream) {
+      try {
+        stream.write({ audio: buf });
+      } catch { /* stream closing */ }
+    } else if (pendingAudio.length < PENDING_MAX) {
+      pendingAudio.push(buf);
+    }
     const rms = chunkRms(buf);
     gate.onChunk(rms); // 無音ゲート：チャンクごとの音量を記録
     // 「お客様発話中」：発話とみなせる音量が続いている間、係員画面へ知らせる。

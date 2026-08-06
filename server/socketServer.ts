@@ -982,7 +982,10 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           metrics.noteStaffSpeechFinal(sessionId);
           // 係員はマイクを切っていても、ここから翻訳・音声合成が続く。返答が実際に出るまで
           // お客様側の「回答を準備しています」を出し続ける（お客様の画面が無反応になるのを防ぐ）。
-          io.to(session.userSocketId).emit("staff:composing", { sessionId, active: true });
+          // synthesizing=true は「これから読み上げが届く」ことの合図。**係員がすぐ通話を
+          // 終了しても、読み上げ終わりまでキオスクが画面を切り替えないため**に使う
+          // （合成に1〜2秒かかるので、この合図が無いと call:ended のほうが先に着く）。
+          io.to(session.userSocketId).emit("staff:composing", { sessionId, active: true, synthesizing: true });
         }
 
         if (!isFinal) {

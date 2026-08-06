@@ -213,6 +213,15 @@ const MIC_ERR: Record<string, Record<MicErrorCode, string>> = {
 const COMPOSING_MAX_MS = 60_000;
 /** アバターが話し終えてから発話検知を再開するまでの余韻（スピーカーの残響・反響対策）。 */
 const AVATAR_TAIL_MS = 500;
+/**
+ * 通話終了のとき、アバターの読み上げが終わるのを待つ上限。
+ * 合成に失敗して音声が来ないまま黙り込む事故に備えた歯止めで、ここに達したら
+ * 待たずに終了画面へ進む。台本の係員のセリフは最長でも50字程度＝10秒弱なので、
+ * 通常の読み上げがこの上限に当たることはない。
+ */
+const END_WAIT_MAX_MS = 15_000;
+/** 音声を出せなかったとき、文字を読む時間として置く間（そのあと終了画面へ進む）。 */
+const NO_AUDIO_GRACE_MS = 3_000;
 
 let entryCounter = 0;
 function makeId() { return `e-${Date.now()}-${entryCounter++}`; }
@@ -567,6 +576,10 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     setForcedTextIds([]);
     setLangPanelOpen(false);
     setPendingLang(null);
+    // 読み上げ待ちの印を次の通話へ持ち越さない
+    speechPendingRef.current = false;
+    avatarSpeakingRef.current = false;
+    pendingEndRef.current = null;
   }, [stopMic]);
 
   // Socket.IO setup
@@ -635,14 +648,35 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     });
 
     s.on("call:ended", () => {
-      setPhase("ended");
+      // ★読み上げが残っているなら、終わるまで画面を切り替えない。
+      //   係員が「ありがとうございました」と言った直後に終了を押すのが自然な流れだが、
+      //   そのままだと読み上げの途中で画面が消えてしまう。待つべき状態は2つある。
+      //   ①もう鳴っている（avatarSpeaking）
+      //   ②まだ鳴っていないが、これから届く（speechPending）
+      //     ＝サーバーは翻訳・音声合成を終えてから送るので1〜2秒かかり、
+      //       **その間に終了されると call:ended のほうが先に着く**（実測で確認）。
+      //       「準備中(synthesizing)」の合図が先に届くので、それで判断している。
+      const finish = () => {
+        setPhase("ended");
+        stopMic();
+        micOnRef.current = false;
+        // Return to lang-select after 3 seconds
+        setTimeout(() => {
+          setPhase("lang-select");
+          resetCallState();
+        }, 3000);
+      };
+      // 「もう鳴っている」だけでなく「これから鳴る」場合も待つ。
+      if (!avatarSpeakingRef.current && !speechPendingRef.current) { finish(); return; }
+      // マイクだけは先に止める（読み上げの声を拾い続けないため）
       stopMic();
       micOnRef.current = false;
-      // Return to lang-select after 3 seconds
+      pendingEndRef.current = finish;
+      // 読み上げ終了の合図が来なかったときの保険（端末側の不具合で固まらないように）
       setTimeout(() => {
-        setPhase("lang-select");
-        resetCallState();
-      }, 3000);
+        const pending = pendingEndRef.current;
+        if (pending) { pendingEndRef.current = null; pending(); }
+      }, END_WAIT_MAX_MS);
     });
 
     // お客様の発言が係員の画面に届いた（既読チェックを表示する）
@@ -651,8 +685,12 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     });
 
     // 係員がマイクON／入力中＝回答を準備している
-    s.on("staff:composing", (payload: { active: boolean }) => {
+    s.on("staff:composing", (payload: { active: boolean; synthesizing?: boolean }) => {
       setStaffComposing(!!payload.active);
+      // synthesizing＝係員の発言が確定し、いま翻訳・音声合成をしている最中。
+      // **この合図は読み上げ本体より先に届く**ので、通話終了が先に来ても
+      // 「返事がまだ来ていない」ことが分かる（係員のマイクONだけでは立てない）。
+      if (payload.active && payload.synthesizing) speechPendingRef.current = true;
     });
 
     // テキスト表示の切り替え。お客様側・係員側のどちらが押しても、サーバーが決めた
@@ -669,6 +707,17 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         lastStaffEntryIdRef.current = entryId;
         // 音声を届けられなかった＝この1件は設定に関わらず文字で出す
         if (payload.forceShowText) setForcedTextIds((prev) => [...prev, entryId]);
+        // これから読み上げが来る（＝音声が出せなかった場合を除く）。通話終了が
+        // 押されても、読み上げ終わりまで画面を切り替えないための印。
+        speechPendingRef.current = !payload.forceShowText;
+        if (payload.forceShowText) {
+          // 音声が無いので読み上げ終了の合図は来ない。文字を読む間だけ置いて進める。
+          const pending = pendingEndRef.current;
+          if (pending) {
+            pendingEndRef.current = null;
+            setTimeout(pending, NO_AUDIO_GRACE_MS);
+          }
+        }
         setLatestAudio(undefined);
         lastAvatarTextRef.current = payload.text;
         // Auto-OFF mic when staff speaks — user must press mic button to respond
@@ -736,11 +785,31 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   // （キオスクのマイクはアバター自身の声も拾うため）。終了時は残響を拾わないよう
   // 少し余韻を置いてから解除する。
   const avatarTailRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * アバターが今しゃべっているか。**通話が終わったときに、読み上げの途中で画面を
+   * 切り替えてしまわないため**に持っている（係員が「ありがとうございました」と言って
+   * すぐ終了すると、その音声はまだ再生中で、画面を消すと途中で切れてしまう）。
+   */
+  const avatarSpeakingRef = useRef(false);
+  /**
+   * 係員の発言のうち、まだ読み上げ終わっていないものがあるか。
+   * **合成には1〜2秒かかるため、「まだ鳴り始めていない」時間帯がある**。そこで終了されると
+   * avatarSpeakingRef は false のままなので、この印がないと待たずに切ってしまう。
+   * 立てる＝係員の発言が確定したとき／倒す＝読み上げ終了、または音声が出せなかったとき。
+   */
+  const speechPendingRef = useRef(false);
+  /** 読み上げが終わるのを待っている「通話終了」の後始末。終わり次第これを実行する。 */
+  const pendingEndRef = useRef<(() => void) | null>(null);
   const notifyAvatarSpeaking = useCallback((speaking: boolean) => {
     if (avatarTailRef.current) { clearTimeout(avatarTailRef.current); avatarTailRef.current = null; }
+    avatarSpeakingRef.current = speaking;
     const send = (v: boolean) =>
       socketRef.current?.emit("user:avatarSpeaking", { sessionId: sessionIdRef.current, speaking: v });
     if (speaking) { send(true); return; }
+    // 読み上げが終わった。待たせていた「通話終了」があれば、ここで進める。
+    speechPendingRef.current = false;
+    const pending = pendingEndRef.current;
+    if (pending) { pendingEndRef.current = null; pending(); }
     avatarTailRef.current = setTimeout(() => { avatarTailRef.current = null; send(false); }, AVATAR_TAIL_MS);
   }, []);
   useEffect(() => () => { if (avatarTailRef.current) clearTimeout(avatarTailRef.current); }, []);
