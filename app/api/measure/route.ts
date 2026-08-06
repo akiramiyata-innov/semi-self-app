@@ -37,6 +37,16 @@ function endOf(log: SessionLog): number {
 }
 
 /**
+ * 通話時間（秒）＝係員が応答してから通話が終わるまで。**参考値で評価には使わない**。
+ * 古いログで durationSeconds が無い場合は開始・終了時刻から求める。
+ */
+function durationOf(log: SessionLog): number | "" {
+  if (typeof log.durationSeconds === "number") return log.durationSeconds;
+  if (!log.startedAt) return "";
+  return Math.round((endOf(log) - log.startedAt) / 1000);
+}
+
+/**
  * その通話と時間帯が重なっていた通話の数（自分を含む）。
  * 「2件同時対応時の遅延増加」を見るために必要な情報を、手入力なしで求める。
  */
@@ -53,7 +63,9 @@ function concurrency(log: SessionLog, all: SessionLog[]): number {
 
 function toCsv(logs: SessionLog[]): string {
   logs.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
-  const head = ["No", "呼び出し→着信表示(秒)", "発話終了→確定テキスト(秒)", "係員発話→アバター発話開始(秒)", "切断回数", "同時通話数", "備考"];
+  // 「通話時間(秒)」は参考値（評価には使わない）。**備考の手前に足す**のが重要で、
+  // 備考より後ろに置くと、評価記入シートの H列以降（自動計算の欄）に貼り重なってしまう。
+  const head = ["No", "呼び出し→着信表示(秒)", "発話終了→確定テキスト(秒)", "係員発話→アバター発話開始(秒)", "切断回数", "同時通話数", "通話時間(秒)", "備考"];
   const rows = [head.join(",")];
   logs.forEach((log, i) => {
     const m = log.metrics;
@@ -72,6 +84,7 @@ function toCsv(logs: SessionLog[]): string {
       m ? sec(avg(m.ttsDelaysMs)) : "",
       m ? (m.disconnects ?? 0) : "",
       concurrency(log, logs), // 通話時間の重なりから自動判定（1＝単独、2＝2件同時…）
+      durationOf(log),
       csv(note),
     ].join(","));
   });

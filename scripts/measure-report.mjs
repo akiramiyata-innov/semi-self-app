@@ -65,6 +65,10 @@ logs.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
 
 /** 通話の終了時刻。古いログで endedAt が無い場合は開始＋通話秒数で補う。 */
 const endOf = (log) => log.endedAt || (log.startedAt ?? 0) + (log.durationSeconds ?? 0) * 1000;
+// 通話時間（秒）＝係員が応答してから通話が終わるまで。参考値で評価には使わない。
+const durationOf = (log) =>
+  typeof log.durationSeconds === "number" ? log.durationSeconds
+  : (log.startedAt ? Math.round((endOf(log) - log.startedAt) / 1000) : "");
 /** 時間帯が重なっていた通話の数（自分を含む）。手入力なしで同時対応を判定する。 */
 const concurrency = (log) => {
   const s = log.startedAt ?? 0;
@@ -79,7 +83,7 @@ const concurrency = (log) => {
 
 const HEAD = [
   "No", "呼び出し→着信表示(秒)", "発話終了→確定テキスト(秒)",
-  "係員発話→アバター発話開始(秒)", "切断回数", "同時通話数", "備考",
+  "係員発話→アバター発話開始(秒)", "切断回数", "同時通話数", "通話時間(秒)", "備考",
 ];
 const rows = [HEAD.join(",")];
 
@@ -105,6 +109,7 @@ for (const log of logs) {
     m ? sec(avg(m.ttsDelaysMs)) : "",
     m ? (m.disconnects ?? 0) : "",
     concurrency(log), // 通話時間の重なりから自動判定（1＝単独、2＝2件同時…）
+    durationOf(log),  // 参考値（評価には使わない）。備考より前に置く
     `"${note.replace(/"/g, '""')}"`,
   ].join(","));
 }

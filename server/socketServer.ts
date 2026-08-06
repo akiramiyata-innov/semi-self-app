@@ -781,7 +781,9 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       eligibleStaffSocketIds.forEach((sid) => {
         io.to(sid).emit("call:incoming", incomingPayload);
       });
-      metrics.noteCallIncoming(sessionId);
+      // ここでは計測を止めない。**送り出した瞬間まで**では通信も描画も含まれず、
+      // 必ず0.00秒になってしまうため（実測で確認）。実際に係員の画面へ着信カードが
+      // 出た時点で送られてくる call:incomingShown で止める。
 
       // 未応答タイムアウト: 応答・拒否・キャンセル・切断のいずれかで解除される。
       // 発火したら呼び出しを打ち切り、お客様へ「混み合っています」、係員へ通知を出す。
@@ -1154,6 +1156,16 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       });
       console.log(`[mic] お客様側のマイク異常 session=${payload.sessionId} code=${payload.code ?? "解消"}`);
       if (payload.code) recordAppError({ type: "mic-user", sessionId: payload.sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), side: "user", detail: `お客様側のマイク異常: ${payload.code}` });
+    });
+
+    // ── 着信が係員の画面に出た（性能測定用）────────────────────────────────
+    // 「呼び出し→係員画面に着信表示」を測るための合図。複数の係員に配信されるので
+    // **最初に届いた1件だけ**を採用する（＝最も早く表示された係員までの時間）。
+    // 2件目以降は noteCallIncoming の中で無視される。
+    socket.on("call:incomingShown", (payload: { sessionId: string }) => {
+      if (!getStaffSession(socket)) return;
+      if (!payload?.sessionId) return;
+      metrics.noteCallIncoming(payload.sessionId);
     });
 
     // ── 係員自身のマイク異常 ──────────────────────────────────────────────────

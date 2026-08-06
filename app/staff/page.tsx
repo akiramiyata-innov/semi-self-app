@@ -524,6 +524,16 @@ export default function StaffPage() {
         prev.some((c) => c.sessionId === payload.sessionId) ? prev : [...prev, payload]
       );
       playBeep();
+      // 「呼び出し→着信表示」の計測。**着信カードが実際に画面に描かれてから**
+      // サーバーへ合図を返す（サーバーは呼び出しを受けた時刻との差を記録する）。
+      // 起点も終点もサーバー側の時計で取るので、端末どうしの時計のずれの影響を受けない。
+      // requestAnimationFrame を2回重ねるのは、1回目が「描く直前」、2回目が
+      // 「描いたあと」に呼ばれるため（＝表示が終わった時点を捉える）。
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          s.emit("call:incomingShown", { sessionId: payload.sessionId });
+        });
+      });
     });
 
     s.on("call:taken", (payload: { sessionId: string }) => {
