@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
-import { PhoneCall, PhoneOff, Mic, X, Check, MessageSquareText } from "lucide-react";
+import { PhoneCall, PhoneOff, Mic, Check, MessageSquareText } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { KioskHeader } from "@/components/KioskHeader";
 import { ScreenShareView } from "@/components/ScreenShareView";
@@ -31,7 +31,11 @@ const ERR: Record<string, { noStaff: string; noStaffSub: string; busy: string; b
 // 通話中の画面に出す文言。お客様が選んだ言語で表示する（日本語は翻訳が入らないので
 // 注釈も「文字起こし」だけにする）。訳文は日本語へ訳し戻して意味を確認済み。
 const UI_TEXT: Record<string, {
-  delivered: string; composing: string; heading: string; cancel: string; notice: string;
+  delivered: string; composing: string; heading: string; notice: string;
+  // cancel はポップアップを閉じる「キャンセル」専用。通話を切る画面下のボタンは
+  // endCall（＝「通話終了」）。**同じ語を使い回すと、片方を直したときにもう片方まで
+  // 変わってしまう**ので分けてある。
+  cancel: string; endCall: string;
   micOn: string; micOff: string;
   // 通話中の言語変更まわり。langLocked はマイクON中に変更しようとしたときの説明、
   // confirmQ / confirmYes は「変更後の言語」で表示する確認ダイアログの文言。
@@ -44,7 +48,7 @@ const UI_TEXT: Record<string, {
 }> = {
   ja: {
     delivered: "係員に伝わりました", composing: "係員が回答を準備しています",
-    heading: "ご用件をお伺いします。", cancel: "キャンセル",
+    heading: "ご用件をお伺いします。", cancel: "キャンセル", endCall: "通話終了",
     notice: "実際の係員との会話を、AIによる「音声発話」「翻訳」「メッセージ表示」等を用いて行います。",
     micOn: "マイクON", micOff: "マイクOFF",
     langChange: "言語を変える", langPick: "言語をお選びください",
@@ -55,7 +59,7 @@ const UI_TEXT: Record<string, {
   },
   en: {
     delivered: "Delivered to staff", composing: "Staff is preparing a reply",
-    heading: "How may we help you?", cancel: "Cancel",
+    heading: "How may we help you?", cancel: "Cancel", endCall: "End Call",
     notice: "You are talking with a real staff member. AI provides the spoken voice, the translation and the on-screen messages.",
     micOn: "Mic ON", micOff: "Mic OFF",
     langChange: "Change language", langPick: "Please select your language",
@@ -66,7 +70,7 @@ const UI_TEXT: Record<string, {
   },
   zh: {
     delivered: "已送达工作人员", composing: "工作人员正在准备回复",
-    heading: "请问有什么可以帮您？", cancel: "Cancel",
+    heading: "请问有什么可以帮您？", cancel: "Cancel", endCall: "End Call",
     notice: "您正在与真人工作人员对话。语音播报、翻译、消息显示等由AI提供。",
     micOn: "Mic ON", micOff: "Mic OFF",
     langChange: "更改语言", langPick: "请选择语言",
@@ -77,7 +81,7 @@ const UI_TEXT: Record<string, {
   },
   "zh-TW": {
     delivered: "已送達服務人員", composing: "服務人員正在準備回覆",
-    heading: "請問有什麼可以為您服務？", cancel: "Cancel",
+    heading: "請問有什麼可以為您服務？", cancel: "Cancel", endCall: "End Call",
     notice: "您正在與真人服務人員對話。語音播報、翻譯、訊息顯示等由AI提供。",
     micOn: "Mic ON", micOff: "Mic OFF",
     langChange: "變更語言", langPick: "請選擇語言",
@@ -88,7 +92,7 @@ const UI_TEXT: Record<string, {
   },
   ko: {
     delivered: "담당자에게 전달되었습니다", composing: "담당자가 답변을 준비하고 있습니다",
-    heading: "무엇을 도와드릴까요?", cancel: "Cancel",
+    heading: "무엇을 도와드릴까요?", cancel: "Cancel", endCall: "End Call",
     notice: "실제 담당자와 대화하고 있습니다. 음성 발화, 번역, 메시지 표시 등은 AI가 제공합니다.",
     micOn: "Mic ON", micOff: "Mic OFF",
     langChange: "언어 변경", langPick: "언어를 선택해 주세요",
@@ -99,7 +103,7 @@ const UI_TEXT: Record<string, {
   },
   fr: {
     delivered: "Transmis à l'agent", composing: "L'agent prépare une réponse",
-    heading: "Comment pouvons-nous vous aider ?", cancel: "Cancel",
+    heading: "Comment pouvons-nous vous aider ?", cancel: "Cancel", endCall: "End Call",
     notice: "Vous parlez avec un agent réel. L'IA fournit la voix, la traduction et l'affichage des messages.",
     micOn: "Mic ON", micOff: "Mic OFF",
     langChange: "Changer de langue", langPick: "Veuillez choisir votre langue",
@@ -110,7 +114,7 @@ const UI_TEXT: Record<string, {
   },
   es: {
     delivered: "Enviado al personal", composing: "El personal está preparando una respuesta",
-    heading: "¿En qué podemos ayudarle?", cancel: "Cancel",
+    heading: "¿En qué podemos ayudarle?", cancel: "Cancel", endCall: "End Call",
     notice: "Está hablando con un agente real. La IA proporciona la voz, la traducción y la visualización de mensajes.",
     micOn: "Mic ON", micOff: "Mic OFF",
     langChange: "Cambiar idioma", langPick: "Seleccione su idioma",
@@ -121,7 +125,7 @@ const UI_TEXT: Record<string, {
   },
   th: {
     delivered: "ส่งถึงเจ้าหน้าที่แล้ว", composing: "เจ้าหน้าที่กำลังเตรียมคำตอบ",
-    heading: "มีอะไรให้เราช่วยเหลือไหม", cancel: "Cancel",
+    heading: "มีอะไรให้เราช่วยเหลือไหม", cancel: "Cancel", endCall: "End Call",
     notice: "คุณกำลังสนทนากับเจ้าหน้าที่จริง โดยใช้ AI ในการอ่านออกเสียง การแปล และการแสดงข้อความ",
     micOn: "Mic ON", micOff: "Mic OFF",
     langChange: "เปลี่ยนภาษา", langPick: "กรุณาเลือกภาษา",
@@ -226,8 +230,11 @@ const LEFT_STRIPE = {
   background: "linear-gradient(180deg, #12b5e5 0%, #7ad8f0 30%, #d3f1fb 70%, #e2f7fa 100%)",
 } as const;
 
-const CANCEL_BUTTON = {
-  background: "linear-gradient(180deg, #e9dff6 0%, #c8b2e4 100%)",
+// 通話終了ボタン。以前は薄い藤色で、周りの淡い配色に埋もれて気づかれにくかった。
+// 電話を切る操作は世界共通で赤なので、8言語のどのお客様にも意味が伝わる。
+// **隣のマイクONは淡い桃色**なので、濃さでも色みでもはっきり違うものを選んでいる。
+const END_CALL_BUTTON = {
+  background: "linear-gradient(180deg, #f87171 0%, #dc2626 100%)",
 } as const;
 
 // マイクボタン。キャンセルと同じ「立体的な丸ボタン」の見た目にそろえたうえで、
@@ -990,13 +997,13 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         <div className="flex items-center gap-4 mt-6 shrink-0">
           <button
             onClick={endCall}
-            style={CANCEL_BUTTON}
-            className="flex items-center gap-4 py-2.5 pl-2.5 pr-9 active:scale-95 text-[#6b4c9a] rounded-full text-3xl font-bold shadow-lg ring-[6px] ring-white/80 transition-all shrink-0"
+            style={END_CALL_BUTTON}
+            className="flex items-center gap-4 py-2.5 pl-2.5 pr-9 active:scale-95 text-white rounded-full text-3xl font-bold shadow-lg ring-[6px] ring-white/80 transition-all shrink-0"
           >
-            <span className="flex items-center justify-center w-14 h-14 rounded-full bg-[#8b5cf6] shrink-0">
-              <X size={30} strokeWidth={3} className="text-white" />
+            <span className="flex items-center justify-center w-14 h-14 rounded-full bg-[#991b1b] shrink-0">
+              <PhoneOff size={30} strokeWidth={3} className="text-white" />
             </span>
-            {ui.cancel}
+            {ui.endCall}
           </button>
 
           <button
