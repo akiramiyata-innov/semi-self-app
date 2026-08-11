@@ -711,17 +711,25 @@ export default function StaffPage() {
   }, [stopMic, stopCapture]);
 
   const toggleMic = useCallback((sessionId: string) => {
-    if (activeListeningSession.current === sessionId) {
+    // ★ON/OFFの判定は「今マイクが入っているか」(micOnRef)で行う。
+    //   activeListeningSession は**遅れて届く確定テキストの行き先**でもあり、OFFにしても
+    //   3秒間（フックのドレイン待ち）は消えない。これを判定に使うと、OFF直後の3秒間は
+    //   「まだこの通話が持ち主だ」→「OFFにする分岐」と誤解し、**押しても何も起きない**。
+    //   実機で「ONにするには2〜3回クリックが必要／OFFは1回」と報告された不具合の原因
+    //   （Space は micOnRef で判定していたため影響を受けず、これが切り分けの決め手になった）。
+    const isOnForThisSession = micOnRef.current && activeListeningSession.current === sessionId;
+    if (isOnForThisSession) {
       // Turn off
       stopMic();
       // Chrome(Web Speech API): onFinal は同期的に発火済みか発火しない → 即座にクリア
-      // Edge(Google STT): onFinal が非同期で後から発火するため onFinal 側でクリアする
+      // Edge(Google STT)・streaming: onFinal / onStop が後から発火するのでそちらでクリアする
+      // （遅れて届く確定テキストの行き先として残す必要があるため、ここでは消さない）
       if (!manualStop) activeListeningSession.current = null;
       setActiveListeningId(null);
       micOnRef.current = false;
     } else {
-      // Turn off previous session's mic first
-      if (activeListeningSession.current) {
+      // 別の通話でマイクが入っていれば先に止める（入っていないなら何もしない）
+      if (micOnRef.current) {
         stopMic();
       }
       // Turn on this session
@@ -730,7 +738,7 @@ export default function StaffPage() {
       micOnRef.current = true;
       startMic("ja-JP");
     }
-  }, [stopMic, startMic]);
+  }, [stopMic, startMic, manualStop]);
 
   // ── 「係員が回答を準備しています」通知 ────────────────────────────────────────
   // お客様は話し終えた後、係員が回答を用意している間ずっと無反応の画面を見ることになり
