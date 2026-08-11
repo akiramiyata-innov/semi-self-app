@@ -104,12 +104,39 @@ function buildCaseRules(terms: GlossaryTerm[]): CaseRule[] {
 /**
  * 連番・繰り返しの「暴走出力」判定。ノイズを与えると chirp 系は「1234567891011…」の
  * ような同種の文字の羅列を出すことがある（実測: 息・衣擦れ風ノイズから数字177文字の
- * 連番が自信度0.98で出た＝自信度ガードでは捕まらない）。実際の発話は漢字・かな交じりで
- * 文字の種類が豊かなので、「約物・空白を除いて20文字以上なのに文字種が10種以下」を
- * 暴走とみなして破棄する（数字の連番＝文字種は最大10種。普通の20文字の文は17種前後）。
+ * 連番が自信度0.98で出た＝自信度ガードでは捕まらない）。
+ *
+ * ★2026-08-11 全面見直し。旧判定は「約物・空白を除いて20文字以上なのに文字種が
+ * 10種以下」の一本だったが、これは文字の種類が数千ある日本語を前提にした基準で、
+ * **26文字しかないアルファベットの言語では普通の文が該当してしまう**。実機の
+ * 「マイクONなのに認識されない（特に外国語）」の主因（実測: "i want to see the
+ * station"=20文字9種 / "es este el tren correcto"=20文字8種 が破棄。逆に
+ * "yes yes yes yes yes yes" は空白除去で18文字となり20文字に届かず素通り＝
+ * 取り逃しも起きていた）。言語の型で判定を分ける:
+ *
+ * - 空白で単語を区切る言語（英・仏・西・韓など）＝空白を含むテキストは、
+ *   「同じ単語の繰り返し率」で判定する（6語以上で異なり語が1/3未満なら暴走。
+ *   "yes yes yes yes yes yes"=6語1種→破棄 / "thank you thank you thank you"
+ *   =6語2種でちょうど1/3→通す）。単語の中に紛れた数字連番などの塊は、
+ *   その塊だけを旧基準（20文字以上かつ10種以下）で見る。
+ * - 空白を使わない言語（日・中・タイ）＝空白を含まないテキストは従来どおり
+ *   （20文字以上かつ文字種10種以下。数字の連番＝文字種は最大10種、
+ *   普通の20文字の日本語文は17種前後なので発話は締め出されない）。
  */
 export function isDegenerateRun(text: string): boolean {
-  const core = text.replace(/[\s、。,.．・]/g, "");
+  const cleaned = text.replace(/[、。,.．・？?！!]/g, " ").trim();
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
+  if (tokens.length >= 2) {
+    // 空白で区切る言語: 文字種では判定しない（アルファベットは種類が少なすぎる）
+    if (tokens.length >= 6) {
+      const unique = new Set(tokens.map((t) => t.toLowerCase())).size;
+      if (unique / tokens.length < 1 / 3) return true; // 同じ語の羅列＝暴走
+    }
+    // 語の中に埋まった連番の塊（例: "料金は 1234567891011121314 です"）
+    return tokens.some((t) => t.length >= 20 && new Set(t).size <= 10);
+  }
+  // 空白を使わない言語・連続した羅列: 従来判定
+  const core = cleaned.replace(/\s/g, "");
   if (core.length < 20) return false;
   return new Set(core).size <= 10;
 }
