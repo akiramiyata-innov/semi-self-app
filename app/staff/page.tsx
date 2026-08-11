@@ -402,6 +402,10 @@ export default function StaffPage() {
   const { startCapture, stopCapture, capturing } = useScreenCapture({
     fps: 5,
     quality: 0.6,
+    // お客様画面（1920×1080）では共有画面を横1024ドットで映すため、送る絵も
+    // それ以上にしておく。640×360のままだと引き伸ばしになり文字がぼやける。
+    width: 1280,
+    height: 720,
     onFrame: (frameData) => {
       const sid = captureSessionRef.current;
       if (sid) socketRef.current?.emit("screen:share", { sessionId: sid, frameData });

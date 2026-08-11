@@ -981,6 +981,15 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   }
 
   // --- In-Call ---
+  // 係員が画面共有をしている間は、共有画面を見せることを最優先にレイアウトを組み替える。
+  // 右側を広げ、アバターは左側の下（会話の下）へ移す。
+  // ★アバターは要素そのものを別の場所に作り直すと読み上げ中の音声が止まる（再生は
+  //   Avatar の中で動いているため）ので、置き場所は変えずに CSS だけで動かしている。
+  const sharing = !!staffScreenFrame;
+  // 共有中のアバターの高さ。文字起こしONのときは会話に場所を譲る。
+  const avatarSlot = textVisible ? 300 : 560;
+  // 左下のボタン列の下端から数えた高さ＝pb-8(32) + ボタン(76) + mt-6(24)。
+  const AVATAR_BOTTOM = 132;
   return (
     <div className="h-screen flex flex-col overflow-hidden relative" style={DOT_BACKGROUND}>
       {/* 左端の縦帯（ヘッダーより手前に重ねる） */}
@@ -997,9 +1006,14 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         <p className="mt-3 text-lg text-gray-500">{ui.notice}</p>
       </div>
 
-      <div className="flex-1 flex overflow-hidden">
+      {/* 共有中のアバターを画面の座標で置けるように relative にしている。 */}
+      <div className="flex-1 flex overflow-hidden relative">
       {/* LEFT: chat + controls */}
-      <div className="flex flex-col w-[58%] px-28 pt-6 pb-8 overflow-hidden">
+      <div
+        className={`flex flex-col px-28 pt-6 pb-8 overflow-hidden transition-[width] duration-300 ${
+          sharing ? "w-[45%]" : "w-[58%]"
+        }`}
+      >
         {/* Chat bubbles。テキスト表示がOFFのときは会話の文字だけを出さない。
             「係員に伝わりました」「係員が回答を準備しています」は状況を伝える表示
             なので、音声をテキスト化したものではなく、OFFでも残す。 */}
@@ -1064,6 +1078,11 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
           <div ref={chatEndRef} />
         </div>
 
+        {/* 共有中はここにアバターが立つ。場所だけを空けておき、絵は下の
+            アバター本体（位置を CSS で動かしている）が重なる。会話の吹き出しが
+            アバターの帽子に触れないよう少しだけ余裕を足す。 */}
+        {sharing && <div className="shrink" style={{ height: avatarSlot + 16 }} />}
+
         {/* Bottom controls */}
         <div className="flex items-center gap-4 mt-6 shrink-0">
           <button
@@ -1112,17 +1131,33 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       </div>
 
       {/* RIGHT: Screen share (when active) + Avatar */}
-      <div className="w-[42%] flex flex-col">
+      <div className={`flex flex-col transition-[width] duration-300 ${sharing ? "w-[55%]" : "w-[42%]"}`}>
         {staffScreenFrame && (
-          <div className="p-4 pb-2 shrink-0">
+          // 共有中はこの列をほぼ全部使う。画像は必ず横長（16:9）で届くので、
+          // aspect-video にすると上下に黒帯が出ずぴったり収まる。
+          <div className="p-4 pb-2 flex-1 min-h-0 flex items-center justify-center">
             <ScreenShareView
               frameData={staffScreenFrame}
               label="スタッフ画面"
-              className="h-52 w-full rounded-xl overflow-hidden border-2 border-sky-400"
+              className="w-full aspect-video max-h-full rounded-xl overflow-hidden border-2 border-sky-400"
             />
           </div>
         )}
-        <div className="flex-1 min-h-0 flex items-end justify-center pb-2">
+        {/* アバター本体。共有中は左側の下へ移す（要素は作り直さない＝読み上げが途切れない）。
+            w-[45%] は左の列と同じ幅＝上の列の指定と対で変えること。maxHeight は画面が
+            短いとき（開発用に小さい窓で開いたとき等）に頭が切れないための保険。 */}
+        <div
+          className={
+            sharing
+              ? "absolute left-0 w-[45%] flex items-end justify-center pointer-events-none"
+              : "flex-1 min-h-0 flex items-end justify-center pb-2"
+          }
+          style={
+            sharing
+              ? { bottom: AVATAR_BOTTOM, height: avatarSlot, maxHeight: `calc(100% - ${AVATAR_BOTTOM + 24}px)` }
+              : undefined
+          }
+        >
           <Avatar
             audioBase64={latestAudio}
             onSpeakingChange={notifyAvatarSpeaking}
