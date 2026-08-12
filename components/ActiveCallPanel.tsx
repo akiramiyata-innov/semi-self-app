@@ -53,6 +53,10 @@ interface ActiveCallPanelProps {
    * 見えないため、原因を切り分けられるよう常時表示する。
    */
   userMicError?: string | null;
+  /** お客様マイクの今の状態。on=聞き取り中／paused=読み上げ中の自動一時停止／off=OFF。 */
+  userMicState?: "on" | "paused" | "off";
+  /** お客様マイクを係員側から入/切する。お客様側の操作と対等（後勝ち）。 */
+  onSetUserMic?: (on: boolean) => void;
 }
 
 export function ActiveCallPanel({
@@ -77,6 +81,8 @@ export function ActiveCallPanel({
   textVisible = false,
   onToggleText,
   userMicError,
+  userMicState = "off",
+  onSetUserMic,
 }: ActiveCallPanelProps) {
   const [inputText, setInputText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -217,6 +223,22 @@ export function ActiveCallPanel({
           >
             {textVisible ? <MessageSquareText size={14} /> : <MessageSquareOff size={14} />}
             {textVisible ? "テキストON" : "テキストOFF"}
+          </button>
+          {/* お客様マイクの入/切。一時停止(paused)は読み上げ中の自動停止＝すぐ再開されるので、
+              ボタンとしては「ONの仲間」（押せばOFFにできる）として扱う。 */}
+          <button
+            onClick={() => onSetUserMic?.(userMicState === "off")}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              userMicState === "on"
+                ? "bg-pink-600 text-white hover:bg-pink-700"
+                : userMicState === "paused"
+                  ? "bg-amber-500 text-white hover:bg-amber-600"
+                  : "bg-gray-200 text-gray-600 hover:bg-gray-300"
+            }`}
+            title={userMicState === "off" ? "お客様のマイクをONにする" : "お客様のマイクをOFFにする"}
+          >
+            {userMicState === "off" ? <MicOff size={14} /> : <Mic size={14} />}
+            {userMicState === "on" ? "お客様マイク稼働中" : userMicState === "paused" ? "お客様マイク停止中" : "お客様マイクOFF"}
           </button>
           <button
             onClick={onEnd}

@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 
+// 一時停止中に実音声の代わりに送る無音チャンク（100ms分・16kHz/16bit＝全ゼロ）。
+// 毎回同じものを送ってよい（送信時に複製されるため使い回しで問題ない）。
+const SILENT_CHUNK = new ArrayBuffer(3200);
+
 /**
  * マイク／音声認識のエラー種別。**文言ではなくコードを返す**のは、お客様画面では
  * お客様が選んだ言語で、係員画面では日本語で出す必要があるため。表示文言は
@@ -96,6 +100,17 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
   // （素早いON/OFFで stt:stop → stt:start の順が逆転し、音声の来ないストリームが
   //   サーバー側に残ってタイムアウトエラーになるのを防ぐ）
   const sttGenRef = useRef(0);
+  // 一時停止（ミュート）。マイクや認識ストリームは動かしたまま、送る音だけを無音に
+  // 差し替える。アバターの読み上げのたびに本当に止めて張り直すと、開通待ちの頭欠けや
+  // 開始/停止の競合（v1.30.4の類）が起きるため、頻繁な一時停止はこの方式で行う。
+  // 無音を送り続けるので、サーバーの無音ゲートが結果を捨て、Google側の
+  // 「音声が来ない」タイムアウトも起きない。
+  const sttMutedRef = useRef(false);
+  const [muted, setMutedState] = useState(false);
+  const setMuted = useCallback((m: boolean) => {
+    sttMutedRef.current = m;
+    setMutedState(m);
+  }, []);
   const sttListenerSocketRef = useRef<Socket | null>(null); // リスナー登録済みソケット
   const sttDrainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sttStartingRef = useRef(false); // getUserMedia 取得中か（完了前の多重取得を防ぐ）
@@ -219,7 +234,9 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
       const source = ctx.createMediaStreamSource(stream);
       const node = new AudioWorkletNode(ctx, "stt-processor");
       sttNodeRef.current = node;
-      node.port.onmessage = (e: MessageEvent) => { socket.emit("stt:audio", e.data); };
+      node.port.onmessage = (e: MessageEvent) => {
+        socket.emit("stt:audio", sttMutedRef.current ? SILENT_CHUNK : e.data);
+      };
       source.connect(node);
       // Pull the graph so the worklet runs, but keep it silent (no mic playback).
       const mute = ctx.createGain();
@@ -370,6 +387,9 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
   // ── Public: stop ───────────────────────────────────────────────────────────
   const stop = useCallback(() => {
     activeRef.current = false;
+    // 一時停止はマイク停止で必ず解除（次のONを無音のまま始めない）
+    sttMutedRef.current = false;
+    setMutedState(false);
     if (streamingEnabled) {
       sttWantRef.current = false; // マイクOFF希望を記録
       stopStreaming();
@@ -414,5 +434,6 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
   }, []);
 
   // manualStop=true → streaming / Edge・GST（手動ON/OFF）、false → Chrome（onFinal で自動OFF）
-  return { start, stop, listening, supported: true, error, errorDetail, manualStop: streamingEnabled || !useWebSpeech };
+  // muted / setMuted はストリーミング方式のみ有効（他方式では常に false のまま）。
+  return { start, stop, listening, muted, setMuted, supported: true, error, errorDetail, manualStop: streamingEnabled || !useWebSpeech };
 }

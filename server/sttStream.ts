@@ -161,6 +161,23 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
   let consecutiveErrors = 0;
   // 無音ゲート：発話音量が観測されていない区間の認識結果（モデルの幻聴）を破棄する
   const gate = new SilenceGate();
+  // 認識ガードの障害履歴への記録は種類ごとに1分に1件へ間引く。マイク常時ON方式では
+  // 待ち時間の雑音でガードが頻繁に作動しうるため、そのまま記録すると障害履歴
+  // （最新500件）が埋まり、本物の障害記録が押し出されてしまう。抑えた回数は
+  // 次に記録するとき件数として書き添える（consoleログは全件そのまま出す）。
+  const GUARD_RECORD_INTERVAL_MS = 60_000;
+  const guardRecordLast = new Map<string, { at: number; suppressed: number }>();
+  const recordGuard = (type: string, detail: string) => {
+    const now = Date.now();
+    const prev = guardRecordLast.get(type);
+    if (prev && now - prev.at < GUARD_RECORD_INTERVAL_MS) {
+      prev.suppressed++;
+      return;
+    }
+    const extra = prev?.suppressed ? `（ほかに直近の間引きで${prev.suppressed}回）` : "";
+    guardRecordLast.set(type, { at: now, suppressed: 0 });
+    recordSocketError(socket.id, { type, detail: detail + extra });
+  };
   // 「お客様発話中」表示用：発話音量が連続したチャンク数（0.2秒＝2チャンク続いたら通知）
   let voiceRun = 0;
   /**
@@ -227,20 +244,20 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
         const verdict = gate.onFinal();
         if (!verdict.accept) {
           console.log(`[stt-gate] 無音区間のため破棄 speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)} raw=${JSON.stringify(raw)}`);
-          recordSocketError(socket.id, { type: "stt-guard-gate", detail: `無音区間の認識結果を破棄（幻聴とみなした）: "${raw.slice(0, 60)}" speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)}` });
+          recordGuard("stt-guard-gate", `無音区間の認識結果を破棄（幻聴とみなした）: "${raw.slice(0, 60)}" speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)}`);
           return;
         }
         // 用語集オウム返しガード：ヒント一覧をそのまま読み上げた形の暴走出力は破棄する。
         const dump = inspectGlossaryDump(base, phrases);
         if (dump.isDump) {
           console.log(`[stt-dump] 用語集の羅列とみなし破棄 hits=${dump.hits} other=${dump.otherRatio.toFixed(2)} raw=${JSON.stringify(raw)}`);
-          recordSocketError(socket.id, { type: "stt-guard-dump", detail: `用語集の羅列とみなし破棄: "${raw.slice(0, 60)}" hits=${dump.hits}` });
+          recordGuard("stt-guard-dump", `用語集の羅列とみなし破棄: "${raw.slice(0, 60)}" hits=${dump.hits}`);
           return;
         }
         // 暴走出力ガード：数字の連番のような同種文字の羅列は幻聴（自信度も高く出るため先に判定）。
         if (isDegenerateRun(base)) {
           console.log(`[stt-run] 連番・繰り返しの暴走とみなし破棄 raw=${JSON.stringify(raw.slice(0, 60))}${raw.length > 60 ? "…" : ""}`);
-          recordSocketError(socket.id, { type: "stt-guard-run", detail: `連番・繰り返しの暴走とみなし破棄: "${raw.slice(0, 60)}"` });
+          recordGuard("stt-guard-run", `連番・繰り返しの暴走とみなし破棄: "${raw.slice(0, 60)}"`);
           return;
         }
         // 自信度ガード：ささやき・息・衣擦れ等の「続く音」は無音ゲートを通るため、
@@ -249,7 +266,7 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
         const confidence = r.alternatives?.[0]?.confidence ?? null;
         if (confidence != null && confidence > 0 && confidence < MIN_CONFIDENCE) {
           console.log(`[stt-conf] 自信度が低いため破棄 confidence=${confidence.toFixed(3)} raw=${JSON.stringify(raw)}`);
-          recordSocketError(socket.id, { type: "stt-guard-conf", detail: `自信度が低いため破棄（幻聴とみなした）: "${raw.slice(0, 60)}" confidence=${confidence.toFixed(3)}` });
+          recordGuard("stt-guard-conf", `自信度が低いため破棄（幻聴とみなした）: "${raw.slice(0, 60)}" confidence=${confidence.toFixed(3)}`);
           return;
         }
         // 確定時のみ、読み照合（kuromoji）で同音の別漢字も矯正する。

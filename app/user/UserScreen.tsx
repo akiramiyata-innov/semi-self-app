@@ -36,7 +36,9 @@ const UI_TEXT: Record<string, {
   // endCall（＝「通話終了」）。**同じ語を使い回すと、片方を直したときにもう片方まで
   // 変わってしまう**ので分けてある。
   cancel: string; endCall: string;
-  micOn: string; micOff: string;
+  // micOn=聞き取り中（稼働中）／micOff=手動OFF／micPaused=読み上げ中の自動一時停止。
+  // micPausedNote は一時停止の理由（何もしなくても再開されることが伝わる短い説明）。
+  micOn: string; micOff: string; micPaused: string; micPausedNote: string;
   // 通話中の言語変更まわり。langLocked はマイクON中に変更しようとしたときの説明、
   // confirmQ / confirmYes は「変更後の言語」で表示する確認ダイアログの文言。
   langChange: string; langPick: string; langLocked: string; confirmQ: string; confirmYes: string;
@@ -51,8 +53,9 @@ const UI_TEXT: Record<string, {
   ja: {
     delivered: "係員に伝わりました", composing: "係員が回答を準備しています",
     heading: "ご用件をお伺いします。", cancel: "キャンセル", endCall: "通話終了",
-    notice: "実際の係員との会話を、AIによる「音声発話」「翻訳」「文字起こし」等を用いて行います。",
-    micOn: "マイクON", micOff: "マイクOFF",
+    notice: "実際の係員との会話を、AIによる「音声発話」「翻訳」「文字起こし」等を用いて行います。通話中はマイクがONのままになります。",
+    micOn: "マイク稼働中", micOff: "マイクOFF",
+    micPaused: "マイク停止中", micPausedNote: "係員の音声の再生中です",
     langChange: "言語を変える", langPick: "言語をお選びください",
     langLocked: "マイクをOFFにすると言語を変えられます",
     confirmQ: "この言語に変更しますか？", confirmYes: "変更する",
@@ -62,8 +65,9 @@ const UI_TEXT: Record<string, {
   en: {
     delivered: "Delivered to staff", composing: "Staff is preparing a reply",
     heading: "How may we help you?", cancel: "Cancel", endCall: "End Call",
-    notice: "You are talking with a real staff member. AI provides the spoken voice, the translation and the transcription.",
+    notice: "You are talking with a real staff member. AI provides the spoken voice, the translation and the transcription. The microphone stays on during the call.",
     micOn: "Mic ON", micOff: "Mic OFF",
+    micPaused: "Mic Paused", micPausedNote: "Playing the staff's voice",
     langChange: "Change language", langPick: "Please select your language",
     langLocked: "Turn the mic off to change the language",
     confirmQ: "Change to this language?", confirmYes: "Change",
@@ -73,8 +77,9 @@ const UI_TEXT: Record<string, {
   zh: {
     delivered: "已送达工作人员", composing: "工作人员正在准备回复",
     heading: "请问有什么可以帮您？", cancel: "Cancel", endCall: "End Call",
-    notice: "您正在与真人工作人员对话。语音播报、翻译、文字记录等由AI提供。",
+    notice: "您正在与真人工作人员对话。语音播报、翻译、文字记录等由AI提供。通话期间麦克风将保持开启。",
     micOn: "Mic ON", micOff: "Mic OFF",
+    micPaused: "Mic Paused", micPausedNote: "正在播放语音",
     langChange: "更改语言", langPick: "请选择语言",
     langLocked: "请先关闭麦克风再更改语言",
     confirmQ: "要更改为该语言吗？", confirmYes: "更改",
@@ -84,8 +89,9 @@ const UI_TEXT: Record<string, {
   "zh-TW": {
     delivered: "已送達服務人員", composing: "服務人員正在準備回覆",
     heading: "請問有什麼可以為您服務？", cancel: "Cancel", endCall: "End Call",
-    notice: "您正在與真人服務人員對話。語音播報、翻譯、文字記錄等由AI提供。",
+    notice: "您正在與真人服務人員對話。語音播報、翻譯、文字記錄等由AI提供。通話期間麥克風將保持開啟。",
     micOn: "Mic ON", micOff: "Mic OFF",
+    micPaused: "Mic Paused", micPausedNote: "正在播放語音",
     langChange: "變更語言", langPick: "請選擇語言",
     langLocked: "請先關閉麥克風再變更語言",
     confirmQ: "要變更為此語言嗎？", confirmYes: "變更",
@@ -95,8 +101,9 @@ const UI_TEXT: Record<string, {
   ko: {
     delivered: "담당자에게 전달되었습니다", composing: "담당자가 답변을 준비하고 있습니다",
     heading: "무엇을 도와드릴까요?", cancel: "Cancel", endCall: "End Call",
-    notice: "실제 담당자와 대화하고 있습니다. 음성 발화, 번역, 텍스트 변환 등은 AI가 제공합니다.",
+    notice: "실제 담당자와 대화하고 있습니다. 음성 발화, 번역, 텍스트 변환 등은 AI가 제공합니다. 통화 중에는 마이크가 켜진 상태로 유지됩니다.",
     micOn: "Mic ON", micOff: "Mic OFF",
+    micPaused: "Mic Paused", micPausedNote: "음성 재생 중",
     langChange: "언어 변경", langPick: "언어를 선택해 주세요",
     langLocked: "마이크를 끄면 언어를 변경할 수 있습니다",
     confirmQ: "이 언어로 변경하시겠습니까?", confirmYes: "변경",
@@ -106,8 +113,9 @@ const UI_TEXT: Record<string, {
   fr: {
     delivered: "Transmis à l'agent", composing: "L'agent prépare une réponse",
     heading: "Comment pouvons-nous vous aider ?", cancel: "Cancel", endCall: "End Call",
-    notice: "Vous parlez avec un agent réel. L'IA fournit la voix, la traduction et la transcription.",
+    notice: "Vous parlez avec un agent réel. L'IA fournit la voix, la traduction et la transcription. Le micro reste activé pendant l'appel.",
     micOn: "Mic ON", micOff: "Mic OFF",
+    micPaused: "Mic Paused", micPausedNote: "Lecture de la voix de l'agent",
     langChange: "Changer de langue", langPick: "Veuillez choisir votre langue",
     langLocked: "Désactivez le micro pour changer de langue",
     confirmQ: "Changer pour cette langue ?", confirmYes: "Changer",
@@ -117,8 +125,9 @@ const UI_TEXT: Record<string, {
   es: {
     delivered: "Enviado al personal", composing: "El personal está preparando una respuesta",
     heading: "¿En qué podemos ayudarle?", cancel: "Cancel", endCall: "End Call",
-    notice: "Está hablando con un agente real. La IA proporciona la voz, la traducción y la transcripción.",
+    notice: "Está hablando con un agente real. La IA proporciona la voz, la traducción y la transcripción. El micrófono permanece activado durante la llamada.",
     micOn: "Mic ON", micOff: "Mic OFF",
+    micPaused: "Mic Paused", micPausedNote: "Reproduciendo la voz del agente",
     langChange: "Cambiar idioma", langPick: "Seleccione su idioma",
     langLocked: "Desactive el micrófono para cambiar de idioma",
     confirmQ: "¿Cambiar a este idioma?", confirmYes: "Cambiar",
@@ -128,8 +137,9 @@ const UI_TEXT: Record<string, {
   th: {
     delivered: "ส่งถึงเจ้าหน้าที่แล้ว", composing: "เจ้าหน้าที่กำลังเตรียมคำตอบ",
     heading: "มีอะไรให้เราช่วยเหลือไหม", cancel: "Cancel", endCall: "End Call",
-    notice: "คุณกำลังสนทนากับเจ้าหน้าที่จริง โดยใช้ AI ในการอ่านออกเสียง การแปล และการถอดข้อความ",
+    notice: "คุณกำลังสนทนากับเจ้าหน้าที่จริง โดยใช้ AI ในการอ่านออกเสียง การแปล และการถอดข้อความ ไมโครโฟนจะเปิดอยู่ตลอดการสนทนา",
     micOn: "Mic ON", micOff: "Mic OFF",
+    micPaused: "Mic Paused", micPausedNote: "กำลังเล่นเสียงของเจ้าหน้าที่",
     langChange: "เปลี่ยนภาษา", langPick: "กรุณาเลือกภาษา",
     langLocked: "ปิดไมโครโฟนเพื่อเปลี่ยนภาษา",
     confirmQ: "ต้องการเปลี่ยนเป็นภาษานี้หรือไม่", confirmYes: "เปลี่ยน",
@@ -258,6 +268,12 @@ const MIC_BUTTON_ON = {
   background: "linear-gradient(180deg, #fde7f0 0%, #f4a6c6 100%)",
 } as const;
 
+// 一時停止（アバター読み上げ中の自動停止）。OFFの灰色と違う「待ち」の色（琥珀）にして、
+// 「壊れた」でも「切った」でもなく一時的な状態だと分かるようにする。
+const MIC_BUTTON_PAUSED = {
+  background: "linear-gradient(180deg, #fdf2dd 0%, #f5cd8a 100%)",
+} as const;
+
 interface UserScreenProps {
   machineId: string;
   machineName: string;
@@ -311,7 +327,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
 
   const langConfig = SUPPORTED_LANGS.find((l) => l.code === userLang);
 
-  const { start: startMic, stop: stopMic, listening, error: micError } = useSpeechRecognition({
+  const { start: startMic, stop: stopMic, listening, muted: micMuted, setMuted: setMicMuted, error: micError } = useSpeechRecognition({
     lang: langConfig?.bcp47 ?? "ja-JP",
     getSocket: () => socketRef.current,
     onInterim: (text) => setInterimUser(text),
@@ -442,8 +458,14 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       lastAvatarTextRef.current = "";
       micOnRef.current = true;
       startMic(langConfig?.bcp47);
+      // 一時停止の印はONにする側で毎回計算し直す。読み上げの最中なら一時停止のまま
+      // 始め（終わり次第自動再開）、そうでなければ必ず解除する——OFFの間に係員の発話が
+      // あると印だけが立ったまま残り、次のONが「停止中」で始まってしまうため。
+      if (STREAMING_STT) {
+        setMicMuted(avatarSpeakingRef.current || speechPendingRef.current);
+      }
     }
-  }, [stopMic, startMic, langConfig]);
+  }, [stopMic, startMic, langConfig, setMicMuted]);
 
   // 通話中の言語変更を確定する。マイクOFF時しか呼ばれないので、認識中のストリームを
   // 張り替える必要はない（次にマイクをONにしたとき新しい言語で始まる）。翻訳とアバターの
@@ -492,12 +514,18 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       if (document.hidden) {
         if (micOnRef.current) stopMic();
       } else {
-        if (micOnRef.current) startMic(langConfig?.bcp47);
+        if (micOnRef.current) {
+          startMic(langConfig?.bcp47);
+          // 復帰時も一時停止の印を計算し直す（読み上げ中なら一時停止から始める）
+          if (STREAMING_STT) {
+            setMicMuted(avatarSpeakingRef.current || speechPendingRef.current);
+          }
+        }
       }
     };
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, [stopMic, startMic, langConfig]);
+  }, [stopMic, startMic, langConfig, setMicMuted]);
 
   // Space key shortcut: toggle mic (in-call only, not when typing in input)
   useEffect(() => {
@@ -612,6 +640,13 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       sessionIdRef.current = payload.sessionId;
       setSessionId(payload.sessionId);
       setPhase("in-call");
+      // 常時ON方式: 通話がつながったらマイクを自動でONにする（切り替え忘れ対策）。
+      // 以後、手動でOFFにするまでONのまま。アバターの読み上げ中だけ自動で一時停止する。
+      if (STREAMING_STT) {
+        lastAvatarTextRef.current = "";
+        micOnRef.current = true;
+        startMic(SUPPORTED_LANGS.find((l) => l.code === userLangRef.current)?.bcp47);
+      }
     });
 
     s.on("call:noStaff", () => {
@@ -720,9 +755,16 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         }
         setLatestAudio(undefined);
         lastAvatarTextRef.current = payload.text;
-        // Auto-OFF mic when staff speaks — user must press mic button to respond
-        stopMic();
-        micOnRef.current = false;
+        if (STREAMING_STT) {
+          // 常時ON方式: マイクは切らず、読み上げの間だけ一時停止（無音を送る）。
+          // 読み上げ本体より先にこの確定が届くので、鳴り始める前に確実に止められる。
+          // 音声が出せない発言(forceShowText)は再生が無いので止めない。
+          if (!payload.forceShowText) setMicMuted(true);
+        } else {
+          // 旧方式: 係員の発話でマイクOFF（お客様がボタンで再開する）
+          stopMic();
+          micOnRef.current = false;
+        }
         setInterimUser("");
       } else {
         setInterimStaff(payload.text);
@@ -737,6 +779,24 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
 
     s.on("screen:share", (payload: { frameData: string }) => {
       setStaffScreenFrame(payload.frameData || null);
+    });
+
+    // 係員画面からお客様のマイクを入/切する（担当係員のみ・サーバーが確認済み）。
+    // お客様のボタン操作と対等＝後から操作したほうが勝つ（テキスト表示スイッチと同じ考え方）。
+    s.on("user:micControl", (payload: { on: boolean }) => {
+      if (!STREAMING_STT) return;
+      if (payload.on) {
+        if (!micOnRef.current) {
+          lastAvatarTextRef.current = "";
+          micOnRef.current = true;
+          startMic(SUPPORTED_LANGS.find((l) => l.code === userLangRef.current)?.bcp47);
+        }
+        // 読み上げ中にONへ戻された場合は一時停止から始める（終わり次第自動再開）
+        setMicMuted(avatarSpeakingRef.current || speechPendingRef.current);
+      } else {
+        micOnRef.current = false;
+        stopMic();
+      }
     });
 
     return () => { s.disconnect(); };
@@ -759,6 +819,15 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     // 画面共有が始まって会話エリアの高さが変わったときに、いちばん新しい発言が
     // 隠れたままにならないようにするため。
   }, [transcript, interimStaff, staffComposing, textVisible, staffScreenFrame]);
+
+  // マイクの今の状態（稼働中/一時停止/OFF）を係員画面へ知らせる。
+  // 係員側の入/切ボタンの表示と、「お客様のマイクが切れている」ことの把握に使う。
+  useEffect(() => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    const state = !listening ? "off" : micMuted ? "paused" : "on";
+    socketRef.current?.emit("user:micState", { sessionId: sid, state });
+  }, [listening, micMuted, sessionId]);
 
   // 解除通知が届かなかった場合の保険（係員が入力途中で離席した等）。
   useEffect(() => {
@@ -808,13 +877,27 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     avatarSpeakingRef.current = speaking;
     const send = (v: boolean) =>
       socketRef.current?.emit("user:avatarSpeaking", { sessionId: sessionIdRef.current, speaking: v });
-    if (speaking) { send(true); return; }
+    if (speaking) {
+      // 鳴り始めたら必ず一時停止（通常は speech:staff 受信時に停止済み。二重の備え）。
+      if (STREAMING_STT) setMicMuted(true);
+      send(true);
+      return;
+    }
     // 読み上げが終わった。待たせていた「通話終了」があれば、ここで進める。
     speechPendingRef.current = false;
     const pending = pendingEndRef.current;
     if (pending) { pendingEndRef.current = null; pending(); }
-    avatarTailRef.current = setTimeout(() => { avatarTailRef.current = null; send(false); }, AVATAR_TAIL_MS);
-  }, []);
+    avatarTailRef.current = setTimeout(() => {
+      avatarTailRef.current = null;
+      send(false);
+      // 常時ON方式: 残響の余韻(AVATAR_TAIL_MS)が過ぎたら聞き取りを自動再開する。
+      // 手動OFF中(micOnRef=false)・次の読み上げが来る・通話終了処理中は再開しない。
+      if (STREAMING_STT && micOnRef.current && !avatarSpeakingRef.current &&
+          !speechPendingRef.current && !pendingEndRef.current) {
+        setMicMuted(false);
+      }
+    }, AVATAR_TAIL_MS);
+  }, [setMicMuted]);
   useEffect(() => () => { if (avatarTailRef.current) clearTimeout(avatarTailRef.current); }, []);
 
   const errMsg = ERR[userLang] ?? ERR.ja;
@@ -1110,25 +1193,32 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             {ui.endCall}
           </button>
 
+          {/* マイクの状態は3つ: 稼働中（桃色）／読み上げ中の一時停止（琥珀）／手動OFF（灰色）。
+              一時停止は「何もしなくても再開される」状態なので、OFFと同じ見た目にしない。 */}
           <button
             onClick={toggleMic}
-            style={listening ? MIC_BUTTON_ON : MIC_BUTTON_OFF}
+            style={listening ? (micMuted ? MIC_BUTTON_PAUSED : MIC_BUTTON_ON) : MIC_BUTTON_OFF}
             className={`flex-1 flex items-center gap-4 py-2.5 pl-2.5 pr-9 active:scale-95 rounded-full shadow-lg ring-[6px] ring-white/80 transition-all text-left ${
-              listening ? "text-[#a3306a]" : "text-gray-500"
+              listening ? (micMuted ? "text-[#8a5a12]" : "text-[#a3306a]") : "text-gray-500"
             }`}
           >
             <div
               className={`w-14 h-14 rounded-full flex items-center justify-center shrink-0 relative transition-colors ${
-                listening ? "bg-[#ec4899]" : "bg-gray-400"
+                listening ? (micMuted ? "bg-[#f59e0b]" : "bg-[#ec4899]") : "bg-gray-400"
               }`}
             >
-              {listening && (
+              {listening && !micMuted && (
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-pink-300 opacity-60" />
               )}
               <Mic size={30} strokeWidth={3} className="text-white relative z-10" />
             </div>
             <div className="flex-1 overflow-hidden">
-              {listening ? (
+              {listening && micMuted ? (
+                <p className="leading-snug line-clamp-2">
+                  <span className="text-3xl font-bold">{ui.micPaused}</span>
+                  <span className="ml-3 text-xl text-gray-600">{ui.micPausedNote}</span>
+                </p>
+              ) : listening ? (
                 <p className="leading-snug line-clamp-2">
                   <span className="text-3xl font-bold">{ui.micOn}</span>
                   {/* 認識中の文字も「音声をテキスト化したもの」なので、非表示のときは出さない。 */}

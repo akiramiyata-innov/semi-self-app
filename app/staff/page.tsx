@@ -60,6 +60,8 @@ interface ActiveSession {
   textVisible: boolean;
   /** お客様側のマイク異常（null＝異常なし）。係員が原因を切り分けられるようにする。 */
   userMicError: MicErrorCode | null;
+  /** お客様マイクの今の状態。on=聞き取り中／paused=読み上げ中の自動一時停止／off=OFF。 */
+  userMicState: "on" | "paused" | "off";
 }
 
 // Kiosk machines available for demo
@@ -599,6 +601,11 @@ export default function StaffPage() {
       if (payload.code) addToast(USER_MIC_ERR_JA[payload.code], "error");
     });
 
+    // お客様マイクの状態（稼働中/一時停止/OFF）。通話パネルの表示と入/切ボタンに使う。
+    s.on("user:micState", (payload: { sessionId: string; state: "on" | "paused" | "off" }) => {
+      updateSession(payload.sessionId, { userMicState: payload.state });
+    });
+
     // 自分（係員）の発話の訳文が返ってきたら、先に表示した吹き出しに書き足す。
     // 送った日本語と、お客様に届いた外国語の両方を係員が確認できるようにするため。
     s.on(
@@ -686,6 +693,8 @@ export default function StaffPage() {
       userSpeaking: false,
       textVisible: false, // 既定は非表示。サーバー側の初期値と合わせる
       userMicError: null,
+      // 応答直後にキオスクが自動ONにして最新状態を送ってくるまでの仮の値
+      userMicState: "off",
     }]]));
   }, [previewFaceFrames]);
 
@@ -1367,6 +1376,8 @@ export default function StaffPage() {
                   soloView={sessions.length === 1}
                   textVisible={session.textVisible}
                   userMicError={session.userMicError ? USER_MIC_ERR_JA[session.userMicError] : null}
+                  userMicState={session.userMicState}
+                  onSetUserMic={(on) => socketRef.current?.emit("staff:setUserMic", { sessionId: session.sessionId, on })}
                   onToggleText={() => toggleTextVisible(session.sessionId)}
                   onToggleMic={() => toggleMic(session.sessionId)}
                   onToggleScreenShare={() => toggleScreenShare(session.sessionId)}

@@ -952,6 +952,25 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       if (speaking) setUserSpeaking(sessionId, session, false); // 拾った残りを消す
     });
 
+    // ── お客様マイクの状態（稼働中/一時停止/OFF）を係員画面へ中継 ──────────────
+    socket.on("user:micState", (payload: { sessionId: string; state: "on" | "paused" | "off" }) => {
+      const { sessionId, state } = payload;
+      const session = activeSessions.get(sessionId);
+      if (!session) return;
+      if (session.userSocketId !== socket.id) return; // 本人のキオスクのみ
+      io.to(session.staffSocketId).emit("user:micState", { sessionId, state });
+    });
+
+    // ── 係員によるお客様マイクの入/切（担当係員のみ）───────────────────────────
+    socket.on("staff:setUserMic", (payload: { sessionId: string; on: boolean }) => {
+      const { sessionId, on } = payload;
+      const session = activeSessions.get(sessionId);
+      if (!session) return;
+      // 担当外の係員や古い画面からの操作を通さない（speech:staff と同じ守り）
+      if (session.staffSocketId !== socket.id) return;
+      io.to(session.userSocketId).emit("user:micControl", { on: !!on });
+    });
+
     // ── 係員が回答を準備中（マイクON／入力中）→ お客様に知らせる ────────────────
     socket.on("staff:composing", (payload: { sessionId: string; active: boolean }) => {
       const { sessionId, active } = payload;
