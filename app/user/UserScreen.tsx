@@ -36,12 +36,13 @@ const UI_TEXT: Record<string, {
   // endCall（＝「通話終了」）。**同じ語を使い回すと、片方を直したときにもう片方まで
   // 変わってしまう**ので分けてある。
   cancel: string; endCall: string;
-  // micOn=聞き取り中（稼働中）／micOff=手動OFF／micPaused=読み上げ中の自動一時停止。
-  // micPausedNote は一時停止の理由（何もしなくても再開されることが伝わる短い説明）。
-  micOn: string; micOff: string; micPaused: string; micPausedNote: string;
-  // 通話中の言語変更まわり。langLocked はマイクON中に変更しようとしたときの説明、
-  // confirmQ / confirmYes は「変更後の言語」で表示する確認ダイアログの文言。
-  langChange: string; langPick: string; langLocked: string; confirmQ: string; confirmYes: string;
+  // micOn=聞き取り中／micOff=手動で止めている／micPaused=読み上げ中の自動一時停止。
+  // Note はそれぞれの補足（ONは「話してよい」、一時停止は「待てば戻る」ことを伝える）。
+  micOn: string; micOnNote: string; micOff: string; micPaused: string; micPausedNote: string;
+  // 通話中の言語変更まわり。confirmQ / confirmYes は「変更後の言語」で表示する確認の文言。
+  // ※以前あった langLocked（マイクON中は変更できない旨の説明）は、言語選択の間だけ
+  //   マイクを自動で止める方式にしたため不要になり削除した。
+  langChange: string; langPick: string; confirmQ: string; confirmYes: string;
   // 会話のテキスト表示スイッチの見出し。ON/OFFはスイッチの絵と英字で示すため、
   // 文言は「何のスイッチか」だけを各言語で持つ。
   // ※2026-08-07に「メッセージ表示」→「文字起こし」へ変更（この機能が実際にしていることは
@@ -54,10 +55,9 @@ const UI_TEXT: Record<string, {
     delivered: "係員に伝わりました", composing: "係員が回答を準備しています",
     heading: "ご用件をお伺いします。", cancel: "キャンセル", endCall: "通話終了",
     notice: "実際の係員との会話を、AIによる「音声発話」「翻訳」「文字起こし」等を用いて行います。通話中はマイクがONのままになります。",
-    micOn: "マイク稼働中", micOff: "マイクOFF",
+    micOn: "マイクON", micOnNote: "どうぞお話しください", micOff: "マイク停止中",
     micPaused: "マイク停止中", micPausedNote: "係員の音声の再生中です",
     langChange: "言語を変える", langPick: "言語をお選びください",
-    langLocked: "マイクをOFFにすると言語を変えられます",
     confirmQ: "この言語に変更しますか？", confirmYes: "変更する",
     textLabel: "文字起こし",
     voiceFailed: "音声をお届けできませんでした。文章をご覧ください。",
@@ -66,10 +66,9 @@ const UI_TEXT: Record<string, {
     delivered: "Delivered to staff", composing: "Staff is preparing a reply",
     heading: "How may we help you?", cancel: "Cancel", endCall: "End Call",
     notice: "You are talking with a real staff member. AI provides the spoken voice, the translation and the transcription. The microphone stays on during the call.",
-    micOn: "Mic ON", micOff: "Mic OFF",
-    micPaused: "Mic Paused", micPausedNote: "Playing the staff's voice",
+    micOn: "Mic ON", micOnNote: "Please speak", micOff: "Mic OFF",
+    micPaused: "Mic Paused", micPausedNote: "Playing the reply",
     langChange: "Change language", langPick: "Please select your language",
-    langLocked: "Turn the mic off to change the language",
     confirmQ: "Change to this language?", confirmYes: "Change",
     textLabel: "Transcript",
     voiceFailed: "The voice could not be played. Please read the message above.",
@@ -78,10 +77,9 @@ const UI_TEXT: Record<string, {
     delivered: "已送达工作人员", composing: "工作人员正在准备回复",
     heading: "请问有什么可以帮您？", cancel: "Cancel", endCall: "End Call",
     notice: "您正在与真人工作人员对话。语音播报、翻译、文字记录等由AI提供。通话期间麦克风将保持开启。",
-    micOn: "Mic ON", micOff: "Mic OFF",
+    micOn: "Mic ON", micOnNote: "请讲话", micOff: "Mic OFF",
     micPaused: "Mic Paused", micPausedNote: "正在播放语音",
     langChange: "更改语言", langPick: "请选择语言",
-    langLocked: "请先关闭麦克风再更改语言",
     confirmQ: "要更改为该语言吗？", confirmYes: "更改",
     textLabel: "文字记录",
     voiceFailed: "语音无法播放，请阅读上面的文字。",
@@ -90,10 +88,9 @@ const UI_TEXT: Record<string, {
     delivered: "已送達服務人員", composing: "服務人員正在準備回覆",
     heading: "請問有什麼可以為您服務？", cancel: "Cancel", endCall: "End Call",
     notice: "您正在與真人服務人員對話。語音播報、翻譯、文字記錄等由AI提供。通話期間麥克風將保持開啟。",
-    micOn: "Mic ON", micOff: "Mic OFF",
+    micOn: "Mic ON", micOnNote: "請說話", micOff: "Mic OFF",
     micPaused: "Mic Paused", micPausedNote: "正在播放語音",
     langChange: "變更語言", langPick: "請選擇語言",
-    langLocked: "請先關閉麥克風再變更語言",
     confirmQ: "要變更為此語言嗎？", confirmYes: "變更",
     textLabel: "文字記錄",
     voiceFailed: "語音無法播放，請閱讀上方的文字。",
@@ -102,10 +99,9 @@ const UI_TEXT: Record<string, {
     delivered: "담당자에게 전달되었습니다", composing: "담당자가 답변을 준비하고 있습니다",
     heading: "무엇을 도와드릴까요?", cancel: "Cancel", endCall: "End Call",
     notice: "실제 담당자와 대화하고 있습니다. 음성 발화, 번역, 텍스트 변환 등은 AI가 제공합니다. 통화 중에는 마이크가 켜진 상태로 유지됩니다.",
-    micOn: "Mic ON", micOff: "Mic OFF",
+    micOn: "Mic ON", micOnNote: "말씀해 주세요", micOff: "Mic OFF",
     micPaused: "Mic Paused", micPausedNote: "음성 재생 중",
     langChange: "언어 변경", langPick: "언어를 선택해 주세요",
-    langLocked: "마이크를 끄면 언어를 변경할 수 있습니다",
     confirmQ: "이 언어로 변경하시겠습니까?", confirmYes: "변경",
     textLabel: "텍스트 변환",
     voiceFailed: "음성을 재생하지 못했습니다. 위의 문장을 읽어 주세요.",
@@ -114,10 +110,9 @@ const UI_TEXT: Record<string, {
     delivered: "Transmis à l'agent", composing: "L'agent prépare une réponse",
     heading: "Comment pouvons-nous vous aider ?", cancel: "Cancel", endCall: "End Call",
     notice: "Vous parlez avec un agent réel. L'IA fournit la voix, la traduction et la transcription. Le micro reste activé pendant l'appel.",
-    micOn: "Mic ON", micOff: "Mic OFF",
-    micPaused: "Mic Paused", micPausedNote: "Lecture de la voix de l'agent",
+    micOn: "Mic ON", micOnNote: "Parlez, s'il vous plaît", micOff: "Mic OFF",
+    micPaused: "Mic Paused", micPausedNote: "Lecture de la réponse",
     langChange: "Changer de langue", langPick: "Veuillez choisir votre langue",
-    langLocked: "Désactivez le micro pour changer de langue",
     confirmQ: "Changer pour cette langue ?", confirmYes: "Changer",
     textLabel: "Transcription",
     voiceFailed: "La voix n'a pas pu être diffusée. Veuillez lire le message ci-dessus.",
@@ -126,10 +121,9 @@ const UI_TEXT: Record<string, {
     delivered: "Enviado al personal", composing: "El personal está preparando una respuesta",
     heading: "¿En qué podemos ayudarle?", cancel: "Cancel", endCall: "End Call",
     notice: "Está hablando con un agente real. La IA proporciona la voz, la traducción y la transcripción. El micrófono permanece activado durante la llamada.",
-    micOn: "Mic ON", micOff: "Mic OFF",
-    micPaused: "Mic Paused", micPausedNote: "Reproduciendo la voz del agente",
+    micOn: "Mic ON", micOnNote: "Hable, por favor", micOff: "Mic OFF",
+    micPaused: "Mic Paused", micPausedNote: "Reproduciendo la respuesta",
     langChange: "Cambiar idioma", langPick: "Seleccione su idioma",
-    langLocked: "Desactive el micrófono para cambiar de idioma",
     confirmQ: "¿Cambiar a este idioma?", confirmYes: "Cambiar",
     textLabel: "Transcripción",
     voiceFailed: "No se pudo reproducir la voz. Lea el mensaje anterior.",
@@ -138,10 +132,9 @@ const UI_TEXT: Record<string, {
     delivered: "ส่งถึงเจ้าหน้าที่แล้ว", composing: "เจ้าหน้าที่กำลังเตรียมคำตอบ",
     heading: "มีอะไรให้เราช่วยเหลือไหม", cancel: "Cancel", endCall: "End Call",
     notice: "คุณกำลังสนทนากับเจ้าหน้าที่จริง โดยใช้ AI ในการอ่านออกเสียง การแปล และการถอดข้อความ ไมโครโฟนจะเปิดอยู่ตลอดการสนทนา",
-    micOn: "Mic ON", micOff: "Mic OFF",
+    micOn: "Mic ON", micOnNote: "เชิญพูดได้เลย", micOff: "Mic OFF",
     micPaused: "Mic Paused", micPausedNote: "กำลังเล่นเสียงของเจ้าหน้าที่",
     langChange: "เปลี่ยนภาษา", langPick: "กรุณาเลือกภาษา",
-    langLocked: "ปิดไมโครโฟนเพื่อเปลี่ยนภาษา",
     confirmQ: "ต้องการเปลี่ยนเป็นภาษานี้หรือไม่", confirmYes: "เปลี่ยน",
     textLabel: "ถอดข้อความ",
     voiceFailed: "ไม่สามารถเล่นเสียงได้ กรุณาอ่านข้อความด้านบน",
@@ -259,9 +252,11 @@ const END_CALL_BUTTON = {
 } as const;
 
 // マイクボタン。キャンセルと同じ「立体的な丸ボタン」の見た目にそろえたうえで、
-// OFF は灰色、ON は桃色にして、いま録っているかどうかが色で分かるようにする。
+// 状態を色で分ける。ON は桃色、読み上げ中の一時停止は琥珀色。
+// 手動で止めているときは**黒地に白抜き**（2026-08-12 ユーザー指定）＝薄い灰色だと
+// 「押せない・壊れている」ようにも見えるため、止まっていることを強い対比で示す。
 const MIC_BUTTON_OFF = {
-  background: "linear-gradient(180deg, #f6f7f9 0%, #d9dde3 100%)",
+  background: "linear-gradient(180deg, #374151 0%, #111827 100%)",
 } as const;
 
 const MIC_BUTTON_ON = {
@@ -316,6 +311,8 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   const sessionIdRef = useRef<string | null>(null);
   const userLangRef = useRef<LangCode>("ja");
   const micOnRef = useRef(false);
+  /** 言語選択の画面を開いているか。開いている間はマイクを一時停止する。 */
+  const langPanelOpenRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   /** 発言を1件追加し、そのidを返す（お客様の発言は「係員に伝わりました」の照合に使う）。 */
@@ -449,6 +446,17 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     }
   }, [micError]);
 
+  /**
+   * いま「聞き取りを止めておくべき」理由があるか。マイクを入れる/戻すすべての場所で
+   * これ1つを見る。理由を各所で書き写すと、v1.30.4 のような
+   * 「場所によって判断が食い違う」不具合の元になるため。
+   * 理由は3つ: ①アバターが読み上げ中 ②これから読み上げが届く ③言語選択の画面を開いている。
+   */
+  const shouldPauseMic = useCallback(
+    () => avatarSpeakingRef.current || speechPendingRef.current || langPanelOpenRef.current,
+    []
+  );
+
   const toggleMic = useCallback(() => {
     if (micOnRef.current) {
       stopMic();
@@ -458,31 +466,49 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       lastAvatarTextRef.current = "";
       micOnRef.current = true;
       startMic(langConfig?.bcp47);
-      // 一時停止の印はONにする側で毎回計算し直す。読み上げの最中なら一時停止のまま
-      // 始め（終わり次第自動再開）、そうでなければ必ず解除する——OFFの間に係員の発話が
-      // あると印だけが立ったまま残り、次のONが「停止中」で始まってしまうため。
-      if (STREAMING_STT) {
-        setMicMuted(avatarSpeakingRef.current || speechPendingRef.current);
-      }
+      // 一時停止の印はONにする側で毎回計算し直す。止めるべき理由があればその状態で
+      // 始め（理由が消え次第、自動再開の経路で解除される）、無ければ必ず解除する——
+      // OFFの間に係員の発話があると印だけが立ったまま残り、次のONが「停止中」で
+      // 始まってしまうため。
+      if (STREAMING_STT) setMicMuted(shouldPauseMic());
     }
-  }, [stopMic, startMic, langConfig, setMicMuted]);
+  }, [stopMic, startMic, langConfig, setMicMuted, shouldPauseMic]);
 
-  // 通話中の言語変更を確定する。マイクOFF時しか呼ばれないので、認識中のストリームを
-  // 張り替える必要はない（次にマイクをONにしたとき新しい言語で始まる）。翻訳とアバターの
-  // 声はサーバーが毎回この言語を見るため、切り替えた直後から新しい言語になる。
+  /** 言語選択の画面を開く。開いている間はマイクを一時停止する（選んでいる声を拾わない）。 */
+  const openLangPanel = useCallback(() => {
+    langPanelOpenRef.current = true;
+    setLangPanelOpen(true);
+    if (STREAMING_STT && micOnRef.current) setMicMuted(true);
+  }, [setMicMuted]);
+
+  /**
+   * 通話中の言語変更を確定する。マイクが動いているときは**認識を新しい言語で開き直す**
+   * （認識のストリームは開いたときの言語のままなので、そのままだと前の言語で聞き続ける）。
+   * 翻訳とアバターの声はサーバーが毎回この言語を見るため、切り替えた直後から新しい言語になる。
+   */
   const confirmLangChange = useCallback(() => {
     if (!pendingLang) return;
+    const nextBcp47 = SUPPORTED_LANGS.find((l) => l.code === pendingLang)?.bcp47;
     setUserLang(pendingLang);
     setPendingLang(null);
+    langPanelOpenRef.current = false;
     setLangPanelOpen(false);
     const sid = sessionIdRef.current;
     if (sid) socketRef.current?.emit("session:setLang", { sessionId: sid, lang: pendingLang });
-  }, [pendingLang]);
+    if (STREAMING_STT && micOnRef.current) {
+      stopMic();
+      startMic(nextBcp47);
+      setMicMuted(shouldPauseMic());
+    }
+  }, [pendingLang, stopMic, startMic, setMicMuted, shouldPauseMic]);
 
+  /** 言語選択の画面を閉じる（変更せずに戻る場合も含む）。マイクは元の状態へ戻す。 */
   const closeLangPanel = useCallback(() => {
+    langPanelOpenRef.current = false;
     setLangPanelOpen(false);
     setPendingLang(null);
-  }, []);
+    if (STREAMING_STT && micOnRef.current) setMicMuted(shouldPauseMic());
+  }, [setMicMuted, shouldPauseMic]);
 
   // 会話のテキスト表示を切り替える。押した手応えのため画面には先に反映し、
   // 最終的な状態はサーバーから届く通知で上書きする（係員と同時に押した場合の整合）。
@@ -516,16 +542,14 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       } else {
         if (micOnRef.current) {
           startMic(langConfig?.bcp47);
-          // 復帰時も一時停止の印を計算し直す（読み上げ中なら一時停止から始める）
-          if (STREAMING_STT) {
-            setMicMuted(avatarSpeakingRef.current || speechPendingRef.current);
-          }
+          // 復帰時も一時停止の印を計算し直す（止める理由が残っていればその状態で始める）
+          if (STREAMING_STT) setMicMuted(shouldPauseMic());
         }
       }
     };
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, [stopMic, startMic, langConfig, setMicMuted]);
+  }, [stopMic, startMic, langConfig, setMicMuted, shouldPauseMic]);
 
   // Space key shortcut: toggle mic (in-call only, not when typing in input)
   useEffect(() => {
@@ -603,6 +627,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     setTextVisible(false);
     setForcedTextIds([]);
     setLangPanelOpen(false);
+    langPanelOpenRef.current = false;
     setPendingLang(null);
     // 読み上げ待ちの印を次の通話へ持ち越さない
     speechPendingRef.current = false;
@@ -791,8 +816,8 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
           micOnRef.current = true;
           startMic(SUPPORTED_LANGS.find((l) => l.code === userLangRef.current)?.bcp47);
         }
-        // 読み上げ中にONへ戻された場合は一時停止から始める（終わり次第自動再開）
-        setMicMuted(avatarSpeakingRef.current || speechPendingRef.current);
+        // 止める理由が残っていればその状態で始める（理由が消え次第、自動で再開される）
+        setMicMuted(shouldPauseMic());
       } else {
         micOnRef.current = false;
         stopMic();
@@ -891,13 +916,12 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       avatarTailRef.current = null;
       send(false);
       // 常時ON方式: 残響の余韻(AVATAR_TAIL_MS)が過ぎたら聞き取りを自動再開する。
-      // 手動OFF中(micOnRef=false)・次の読み上げが来る・通話終了処理中は再開しない。
-      if (STREAMING_STT && micOnRef.current && !avatarSpeakingRef.current &&
-          !speechPendingRef.current && !pendingEndRef.current) {
+      // 手動OFF中(micOnRef=false)・止める理由が残っている・通話終了処理中は再開しない。
+      if (STREAMING_STT && micOnRef.current && !shouldPauseMic() && !pendingEndRef.current) {
         setMicMuted(false);
       }
     }, AVATAR_TAIL_MS);
-  }, [setMicMuted]);
+  }, [setMicMuted, shouldPauseMic]);
   useEffect(() => () => { if (avatarTailRef.current) clearTimeout(avatarTailRef.current); }, []);
 
   const errMsg = ERR[userLang] ?? ERR.ja;
@@ -1199,33 +1223,43 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             onClick={toggleMic}
             style={listening ? (micMuted ? MIC_BUTTON_PAUSED : MIC_BUTTON_ON) : MIC_BUTTON_OFF}
             className={`flex-1 flex items-center gap-4 py-2.5 pl-2.5 pr-9 active:scale-95 rounded-full shadow-lg ring-[6px] ring-white/80 transition-all text-left ${
-              listening ? (micMuted ? "text-[#8a5a12]" : "text-[#a3306a]") : "text-gray-500"
+              listening ? (micMuted ? "text-[#8a5a12]" : "text-[#a3306a]") : "text-white"
             }`}
           >
             <div
               className={`w-14 h-14 rounded-full flex items-center justify-center shrink-0 relative transition-colors ${
-                listening ? (micMuted ? "bg-[#f59e0b]" : "bg-[#ec4899]") : "bg-gray-400"
+                listening ? (micMuted ? "bg-[#f59e0b]" : "bg-[#ec4899]") : "bg-white"
               }`}
             >
               {listening && !micMuted && (
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-pink-300 opacity-60" />
               )}
-              <Mic size={30} strokeWidth={3} className="text-white relative z-10" />
+              <Mic
+                size={30}
+                strokeWidth={3}
+                className={`relative z-10 ${listening ? "text-white" : "text-gray-900"}`}
+              />
             </div>
+            {/* 状態名を1行目、補足を2行目に置く。横に並べると画面が狭いとき
+                「お話しく／ださい」のように語の途中で折り返してしまうため。
+                2行あわせて丸アイコン(56px)より低くしてあるので、どの状態でも
+                ボタンの高さは変わらない。 */}
             <div className="flex-1 overflow-hidden">
               {listening && micMuted ? (
-                <p className="leading-snug line-clamp-2">
-                  <span className="text-3xl font-bold">{ui.micPaused}</span>
-                  <span className="ml-3 text-xl text-gray-600">{ui.micPausedNote}</span>
+                <p className="leading-none">
+                  <span className="block text-3xl leading-none font-bold">{ui.micPaused}</span>
+                  <span className="block mt-1 text-base leading-none text-gray-600 truncate">{ui.micPausedNote}</span>
                 </p>
               ) : listening ? (
-                <p className="leading-snug line-clamp-2">
-                  <span className="text-3xl font-bold">{ui.micOn}</span>
-                  {/* 認識中の文字も「音声をテキスト化したもの」なので、非表示のときは出さない。 */}
-                  {textVisible && interimUser && <span className="ml-3 text-xl text-gray-700">{interimUser}</span>}
+                <p className="leading-none">
+                  <span className="block text-3xl leading-none font-bold">{ui.micOn}</span>
+                  {/* 認識中の文字が出ているときは、そちらを読ませたいので案内文は引っ込める。 */}
+                  <span className="block mt-1 text-base leading-none text-gray-700 truncate">
+                    {textVisible && interimUser ? interimUser : ui.micOnNote}
+                  </span>
                 </p>
               ) : micError ? (
-                <p className="text-base text-red-500">{micErrText}</p>
+                <p className="text-base text-red-300">{micErrText}</p>
               ) : (
                 <p className="text-3xl font-bold">{ui.micOff}</p>
               )}
@@ -1316,11 +1350,11 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             </span>
           </button>
 
+          {/* 言語の選び直し。開いている間はマイクを自動で止め、閉じたら元に戻すので、
+              マイクの状態にかかわらずいつでも押せる。 */}
           <button
-            onClick={() => setLangPanelOpen(true)}
-            className={`flex items-center gap-3 bg-white py-2 pl-2 pr-7 rounded-full shadow-lg ring-[6px] ring-white/80 active:scale-95 transition-all ${
-              listening ? "opacity-50" : "hover:bg-gray-50"
-            }`}
+            onClick={openLangPanel}
+            className="flex items-center gap-3 bg-white py-2 pl-2 pr-7 rounded-full shadow-lg ring-[6px] ring-white/80 active:scale-95 transition-all hover:bg-gray-50"
           >
             <span className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center shrink-0 text-4xl leading-none">
               {langConfig?.flag}
@@ -1343,20 +1377,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             className="bg-white rounded-3xl shadow-2xl px-12 py-10 w-full max-w-3xl"
             onClick={(e) => e.stopPropagation()}
           >
-            {listening ? (
-              // マイクON中は変更させない（認識中の音声を取りこぼすため）
-              <>
-                <p className="text-3xl font-bold text-gray-900 text-center leading-snug">{ui.langLocked}</p>
-                <div className="mt-10 flex justify-center">
-                  <button
-                    onClick={closeLangPanel}
-                    className="px-10 py-4 rounded-full bg-gray-200 hover:bg-gray-300 active:scale-95 text-2xl font-bold text-gray-700 transition-all"
-                  >
-                    {ui.cancel}
-                  </button>
-                </div>
-              </>
-            ) : pendingLang && pendingLangConfig && pendingUi ? (
+            {pendingLang && pendingLangConfig && pendingUi ? (
               <>
                 <div className="flex flex-col items-center gap-3">
                   <span className="text-7xl leading-none">{pendingLangConfig.flag}</span>
