@@ -755,7 +755,10 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [transcript, interimStaff, staffComposing]);
+    // textVisible / staffScreenFrame も見ているのは、文字起こしを途中でONにしたときや
+    // 画面共有が始まって会話エリアの高さが変わったときに、いちばん新しい発言が
+    // 隠れたままにならないようにするため。
+  }, [transcript, interimStaff, staffComposing, textVisible, staffScreenFrame]);
 
   // 解除通知が届かなかった場合の保険（係員が入力途中で離席した等）。
   useEffect(() => {
@@ -986,10 +989,19 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   // ★アバターは要素そのものを別の場所に作り直すと読み上げ中の音声が止まる（再生は
   //   Avatar の中で動いているため）ので、置き場所は変えずに CSS だけで動かしている。
   const sharing = !!staffScreenFrame;
-  // 共有中のアバターの高さ。文字起こしONのときは会話に場所を譲る。
-  const avatarSlot = textVisible ? 300 : 560;
   // 左下のボタン列の下端から数えた高さ＝pb-8(32) + ボタン(76) + mt-6(24)。
   const AVATAR_BOTTOM = 132;
+  // ★アバターの高さはドット数で決めない。実機は 1920×1080 の画面を125%に拡大して
+  //   表示しており、アプリから見える広さは 1536×864 しかない。ここを固定値(300)に
+  //   していたため、狭い画面ではその分がまるごと会話エリアから引かれ、会話が
+  //   縦139ドットまで潰れていた（v1.31.0の不具合）。本体の高さに対する割合で決める。
+  //   本体の高さ＝画面の高さ − ヘッダー(96) − 見出し(141)。
+  const ROW_H = "(100vh - 237px)";
+  // 文字起こしONのときは会話に場所を譲る。
+  const avatarVisible = `calc(${ROW_H} * ${textVisible ? 0.27 : 0.75})`;
+  // 文字起こしONのときは「胸から上」だけを見せる（上から6割を残して下を隠す）。
+  // 切り取ったぶん拡大するので、顔の大きさはほとんど変わらない。
+  const avatarFull = textVisible ? `calc(${avatarVisible} / 0.6)` : avatarVisible;
   return (
     <div className="h-screen flex flex-col overflow-hidden relative" style={DOT_BACKGROUND}>
       {/* 左端の縦帯（ヘッダーより手前に重ねる） */}
@@ -1009,9 +1021,11 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       {/* 共有中のアバターを画面の座標で置けるように relative にしている。 */}
       <div className="flex-1 flex overflow-hidden relative">
       {/* LEFT: chat + controls */}
+      {/* 共有中は左右の余白を詰める。会話の幅が広がるうえ、下の「通話終了／マイク」が
+          入りきらず文字が2行に折り返す不具合も解消する（実機1536×864で発生していた）。 */}
       <div
-        className={`flex flex-col px-28 pt-6 pb-8 overflow-hidden transition-[width] duration-300 ${
-          sharing ? "w-[45%]" : "w-[58%]"
+        className={`flex flex-col pt-6 pb-8 overflow-hidden transition-[width] duration-300 ${
+          sharing ? "w-[45%] px-10" : "w-[58%] px-28"
         }`}
       >
         {/* Chat bubbles。テキスト表示がOFFのときは会話の文字だけを出さない。
@@ -1081,7 +1095,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         {/* 共有中はここにアバターが立つ。場所だけを空けておき、絵は下の
             アバター本体（位置を CSS で動かしている）が重なる。会話の吹き出しが
             アバターの帽子に触れないよう少しだけ余裕を足す。 */}
-        {sharing && <div className="shrink" style={{ height: avatarSlot + 16 }} />}
+        {sharing && <div className="shrink" style={{ height: `calc(${avatarVisible} + 16px)` }} />}
 
         {/* Bottom controls */}
         <div className="flex items-center gap-4 mt-6 shrink-0">
@@ -1149,22 +1163,27 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         <div
           className={
             sharing
-              ? "absolute left-0 w-[45%] flex items-end justify-center pointer-events-none"
+              ? "absolute left-0 w-[45%] flex items-start justify-center overflow-hidden pointer-events-none"
               : "flex-1 min-h-0 flex items-end justify-center pb-2"
           }
           style={
             sharing
-              ? { bottom: AVATAR_BOTTOM, height: avatarSlot, maxHeight: `calc(100% - ${AVATAR_BOTTOM + 24}px)` }
+              ? { bottom: AVATAR_BOTTOM, height: avatarVisible, maxHeight: `calc(100% - ${AVATAR_BOTTOM + 24}px)` }
               : undefined
           }
         >
-          <Avatar
-            audioBase64={latestAudio}
-            onSpeakingChange={notifyAvatarSpeaking}
-            onPlaybackError={handlePlaybackError}
-            visible
-            size="xl"
-          />
+          {/* 内側の入れ物。外より背を高くして上端で揃えると、下（お腹から下）が
+              隠れて「胸から上」になる。この入れ物は共有していないときも必ず置く
+              ——アバターを別の場所に作り直すと読み上げ中の音声が止まるため。 */}
+          <div className={sharing ? "shrink-0" : "h-full"} style={sharing ? { height: avatarFull } : undefined}>
+            <Avatar
+              audioBase64={latestAudio}
+              onSpeakingChange={notifyAvatarSpeaking}
+              onPlaybackError={handlePlaybackError}
+              visible
+              size="xl"
+            />
+          </div>
         </div>
 
         {/* アバターの下の設定ボタン。左＝会話のテキスト表示ON/OFF、右＝言語の選び直し。
