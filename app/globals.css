@@ -57,3 +57,30 @@ body {
 .call-queue-item {
   animation: slide-in-right 0.3s ease-out;
 }
+
+/* お客様画面のマイクボタン「聞き取り中」の表示。
+   駅の券売機は少し離れて立つので、いま声を拾っていることが遠目にも分かるよう
+   ①外へ広がる波を2枚ずらして出し ②マイクの丸自体もゆっくり脈打たせる。 */
+@keyframes mic-live-wave {
+  0% { transform: scale(1); opacity: 0.75; }
+  70% { transform: scale(2.1); opacity: 0; }
+  100% { transform: scale(2.1); opacity: 0; }
+}
+
+@keyframes mic-live-dot {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+.mic-live-wave {
+  animation: mic-live-wave 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* 2枚目は半周ずらして、波が途切れず続いているように見せる */
+.mic-live-wave-delayed {
+  animation-delay: 0.8s;
+}
+
+.mic-live-dot {
+  animation: mic-live-dot 1.6s ease-in-out infinite;
+}
