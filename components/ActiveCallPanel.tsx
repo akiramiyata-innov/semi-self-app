@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Monitor, MonitorOff, Mic, MicOff, PhoneOff, Send, MessageSquareText, MessageSquareOff } from "lucide-react";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { ScreenShareView } from "./ScreenShareView";
+import { Flag } from "./Flag";
 import { SUPPORTED_LANGS } from "@/lib/languages";
 import type { TranscriptEntry } from "@/lib/types";
 import type { LangCode } from "@/lib/socketEvents";
@@ -145,7 +146,7 @@ export function ActiveCallPanel({
           {/* User language badge */}
           {lang && (
             <span className="flex items-center gap-1 bg-white border border-gray-300 text-gray-700 text-xs px-2 py-0.5 rounded-full">
-              <span>{lang.flag}</span>
+              <Flag code={lang.code} size={18} />
               <span>{lang.label}</span>
             </span>
           )}

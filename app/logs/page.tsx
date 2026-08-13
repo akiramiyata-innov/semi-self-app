@@ -6,6 +6,7 @@ import { ArrowLeft, Clock, MessageSquare, ChevronRight } from "lucide-react";
 import { TranscriptPanel } from "@/components/TranscriptPanel";
 import { SUPPORTED_LANGS } from "@/lib/languages";
 import type { SessionLog, SessionSummary } from "@/lib/types";
+import { Flag } from "@/components/Flag";
 
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleString("ja-JP", {
@@ -46,7 +47,13 @@ export default function LogsPage() {
 
   const getLangLabel = (code: string) => {
     const l = SUPPORTED_LANGS.find((s) => s.code === code);
-    return l ? `${l.flag} ${l.label}` : code;
+    if (!l) return code;
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <Flag code={l.code} size={18} />
+        {l.label}
+      </span>
+    );
   };
 
   return (

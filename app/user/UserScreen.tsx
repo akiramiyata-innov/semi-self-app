@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import { PhoneCall, PhoneOff, Mic, Check, MessageSquareText } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
+import { Flag } from "@/components/Flag";
 import { KioskHeader } from "@/components/KioskHeader";
 import { ScreenShareView } from "@/components/ScreenShareView";
 import { SUPPORTED_LANGS } from "@/lib/languages";
@@ -995,7 +996,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
               onClick={() => selectLang(l.code)}
               className="flex flex-col items-center gap-2 bg-white/10 hover:bg-white/25 active:scale-95 rounded-2xl p-6 transition-all text-white border border-white/20 hover:border-white/40"
             >
-              <span className="text-4xl">{l.flag}</span>
+              <Flag code={l.code} size={56} />
               <span className="text-sm font-medium">{l.label}</span>
             </button>
           ))}
@@ -1347,8 +1348,8 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             onClick={openLangPanel}
             className="flex items-center gap-3 bg-white py-2 pl-2 pr-7 rounded-full shadow-lg ring-[6px] ring-white/80 active:scale-95 transition-all hover:bg-gray-50"
           >
-            <span className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center shrink-0 text-4xl leading-none">
-              {langConfig?.flag}
+            <span className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center shrink-0">
+              {langConfig && <Flag code={langConfig.code} size={40} />}
             </span>
             <span className="text-2xl text-gray-700 font-bold">{ui.langChange}</span>
           </button>
@@ -1371,7 +1372,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             {pendingLang && pendingLangConfig && pendingUi ? (
               <>
                 <div className="flex flex-col items-center gap-3">
-                  <span className="text-7xl leading-none">{pendingLangConfig.flag}</span>
+                  <Flag code={pendingLangConfig.code} size={104} />
                   <span className="text-4xl font-bold text-gray-900">{pendingLangConfig.label}</span>
                 </div>
                 {/* 変更後の言語で尋ねる。押し間違えても意味が分かるよう今の言語でも併記する。 */}
@@ -1407,7 +1408,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
                           : "border-gray-200 hover:border-[#8b5cf6] hover:bg-violet-50 active:scale-95"
                       }`}
                     >
-                      <span className="text-5xl leading-none">{l.flag}</span>
+                      <Flag code={l.code} size={68} />
                       <span className="text-base font-medium text-gray-800">{l.label}</span>
                     </button>
                   ))}

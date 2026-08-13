@@ -5,15 +5,18 @@ import type { LangCode } from "./socketEvents";
 // consistent person across languages. Traditional Chinese (cmn-TW) has no
 // Chirp3-HD voice yet, so it uses the female Wavenet-A (Wavenet-C was male —
 // a mismatch with the female avatar).
+// 国旗は絵文字ではなく public/flags/*.svg の画像で表示する（components/Flag.tsx）。
+// **Windows の標準の絵文字フォントには国旗が入っておらず「JP」「US」等の2文字になる**ため、
+// ここに絵文字を持たせない（持たせると、また表示に使われてしまう）。
 export const SUPPORTED_LANGS = [
-  { code: "ja" as LangCode, bcp47: "ja-JP", label: "日本語", flag: "🇯🇵", ttsVoice: "ja-JP-Chirp3-HD-Achernar" },
-  { code: "en" as LangCode, bcp47: "en-US", label: "English", flag: "🇺🇸", ttsVoice: "en-US-Chirp3-HD-Achernar" },
-  { code: "zh" as LangCode, bcp47: "zh-CN", label: "中文（简体）", flag: "🇨🇳", ttsVoice: "cmn-CN-Chirp3-HD-Achernar" },
-  { code: "zh-TW" as LangCode, bcp47: "zh-TW", label: "中文（繁体）", flag: "🇹🇼", ttsVoice: "cmn-TW-Wavenet-A" },
-  { code: "ko" as LangCode, bcp47: "ko-KR", label: "한국어", flag: "🇰🇷", ttsVoice: "ko-KR-Chirp3-HD-Achernar" },
-  { code: "fr" as LangCode, bcp47: "fr-FR", label: "Français", flag: "🇫🇷", ttsVoice: "fr-FR-Chirp3-HD-Achernar" },
-  { code: "es" as LangCode, bcp47: "es-ES", label: "Español", flag: "🇪🇸", ttsVoice: "es-ES-Chirp3-HD-Achernar" },
-  { code: "th" as LangCode, bcp47: "th-TH", label: "ภาษาไทย", flag: "🇹🇭", ttsVoice: "th-TH-Chirp3-HD-Achernar" },
+  { code: "ja" as LangCode, bcp47: "ja-JP", label: "日本語", ttsVoice: "ja-JP-Chirp3-HD-Achernar" },
+  { code: "en" as LangCode, bcp47: "en-US", label: "English", ttsVoice: "en-US-Chirp3-HD-Achernar" },
+  { code: "zh" as LangCode, bcp47: "zh-CN", label: "中文（简体）", ttsVoice: "cmn-CN-Chirp3-HD-Achernar" },
+  { code: "zh-TW" as LangCode, bcp47: "zh-TW", label: "中文（繁体）", ttsVoice: "cmn-TW-Wavenet-A" },
+  { code: "ko" as LangCode, bcp47: "ko-KR", label: "한국어", ttsVoice: "ko-KR-Chirp3-HD-Achernar" },
+  { code: "fr" as LangCode, bcp47: "fr-FR", label: "Français", ttsVoice: "fr-FR-Chirp3-HD-Achernar" },
+  { code: "es" as LangCode, bcp47: "es-ES", label: "Español", ttsVoice: "es-ES-Chirp3-HD-Achernar" },
+  { code: "th" as LangCode, bcp47: "th-TH", label: "ภาษาไทย", ttsVoice: "th-TH-Chirp3-HD-Achernar" },
 ] as const;
 
 export type SupportedLang = (typeof SUPPORTED_LANGS)[number];

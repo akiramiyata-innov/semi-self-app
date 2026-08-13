@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { PhoneCall, PhoneOff } from "lucide-react";
 import { SUPPORTED_LANGS } from "@/lib/languages";
 import type { LangCode } from "@/lib/socketEvents";
+import { Flag } from "./Flag";
 
 interface CallQueueItemProps {
   sessionId: string;
@@ -64,7 +65,7 @@ export function CallQueueItem({
         {/* Language badge */}
         {lang && (
           <span className="inline-flex items-center gap-1 text-xs text-gray-600 mt-0.5">
-            <span>{lang.flag}</span>
+            <Flag code={lang.code} size={18} />
             <span>{lang.label}</span>
           </span>
         )}
