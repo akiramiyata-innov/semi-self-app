@@ -514,16 +514,6 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   // 直近の係員の発言id。音声を再生できなかったとき、この発言を文字で出す。
   const lastStaffEntryIdRef = useRef<string | null>(null);
 
-  // アバターが音声を再生できなかったとき（デコード失敗・自動再生のブロック等）。
-  // サーバーは音声を送れているので合成側では検知できない。ここで文字を出し、
-  // 係員にも知らせる（お客様に音も文字も届かない状態を防ぐ）。
-  const handlePlaybackError = useCallback(() => {
-    const id = lastStaffEntryIdRef.current;
-    if (id) setForcedTextIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
-    const sid = sessionIdRef.current;
-    if (sid) socketRef.current?.emit("tts:playbackFailed", { sessionId: sid });
-  }, []);
-
   // Pause mic when tab goes to background (prevents cross-tab audio pickup)
   useEffect(() => {
     const handleVisibility = () => {
@@ -913,6 +903,25 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     }, AVATAR_TAIL_MS);
   }, [setMicMuted, shouldPauseMic]);
   useEffect(() => () => { if (avatarTailRef.current) clearTimeout(avatarTailRef.current); }, []);
+
+  /**
+   * アバターが音声を再生できなかったとき（デコード失敗・自動再生のブロック・
+   * 端末の音声デバイスの不調など）。サーバーは音声を送れているので、合成側では
+   * 検知できない。お客様に音も文字も届かない状態を防ぐため、ここで
+   *   ①その発言だけ文字で出す（「文字起こし」がOFFでも出す）
+   *   ②係員に知らせる（障害履歴にも残る）
+   *   ③**読み上げ待ちの状態を解く**
+   * を行う。③が無いと、鳴らないまま「読み上げ中」の印が立ちっぱなしになり、
+   * お客様のマイクが自動で戻らず、待たせている「通話終了」も進まない。
+   */
+  const handlePlaybackError = useCallback(() => {
+    const id = lastStaffEntryIdRef.current;
+    if (id) setForcedTextIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    const sid = sessionIdRef.current;
+    if (sid) socketRef.current?.emit("tts:playbackFailed", { sessionId: sid });
+    // 読み上げは行われない。終わったときと同じ後始末をする（マイクの再開・通話終了の続行）。
+    notifyAvatarSpeaking(false);
+  }, [notifyAvatarSpeaking]);
 
   const errMsg = ERR[userLang] ?? ERR.ja;
   const ui = UI_TEXT[userLang] ?? UI_TEXT.ja;

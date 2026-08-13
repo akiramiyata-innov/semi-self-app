@@ -183,11 +183,26 @@ export function Avatar({
     // lib/audioUnlock). Creating a fresh context here instead would start it
     // suspended — browsers only let audio play from a gesture-unlocked context.
     const ctx = getSharedAudioContext();
-    if (!ctx) return;
+    if (!ctx) {
+      // Web Audio が使えないブラウザ。黙って諦めると音も文字も出ないので失敗として扱う。
+      onPlaybackErrorRef.current?.();
+      return;
+    }
 
     decodeChainRef.current = decodeChainRef.current
       .then(async () => {
-        if (ctx.state === "suspended") await ctx.resume();
+        // ブラウザは「画面を触るまで音を鳴らさない」ので、止まっていたら動かし直す。
+        if (ctx.state === "suspended") {
+          try { await ctx.resume(); } catch { /* 次の判定で失敗として扱う */ }
+        }
+        // ★resume() が例外を投げずに、止まったままのことがある（許可が下りていない・
+        //   端末側の音声デバイスの問題など）。ここで弾かないと、音が出ないのに
+        //   source.start() まで進み、ended が来ないため **アバターが読み上げ中のまま
+        //   固まり、お客様のマイクが自動で戻らない**。しかも誰にも通知が出ない。
+        //   実機で「お客様側のPCだけ音が鳴らない」事象があり、この経路を塞いだ。
+        if (ctx.state !== "running") {
+          throw new Error(`audio context is ${ctx.state}`);
+        }
 
         const binary = atob(audioBase64);
         const bytes = new Uint8Array(binary.length);
