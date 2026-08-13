@@ -10,13 +10,25 @@ export interface SessionPayload {
 
 export const SESSION_COOKIE_NAME = "staff-session";
 
+/**
+ * ログイン状態の持ち方。
+ *
+ * ★maxAge / expires を**あえて付けない**（2026-08-13）。付けないとブラウザを閉じた
+ * 時点で消える「セッションクッキー」になり、**次に開いたときは必ずログインから**始まる。
+ * 遠隔操作端末は交代で使うため、7日保持のままだと**前の担当者のログイン状態を次の人が
+ * そのまま引き継いでしまう**（誰の操作か分からなくなる）。それを断つための変更。
+ *
+ * 期限そのものは createSessionToken 側で 12 時間にしている（閉じ忘れへの備え）。
+ */
 export const SESSION_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
   sameSite: "lax" as const,
-  maxAge: 60 * 60 * 24 * 7, // 7 days
   path: "/",
 };
+
+/** ログイン状態の有効期限。勤務1回分を想定した長さ。 */
+export const SESSION_MAX_AGE = "12h";
 
 function getSecret() {
   const s = process.env.SESSION_SECRET;
@@ -27,7 +39,7 @@ function getSecret() {
 export async function createSessionToken(payload: SessionPayload): Promise<string> {
   return new SignJWT({ ...payload })
     .setProtectedHeader({ alg: "HS256" })
-    .setExpirationTime("7d")
+    .setExpirationTime(SESSION_MAX_AGE)
     .sign(getSecret());
 }
 
