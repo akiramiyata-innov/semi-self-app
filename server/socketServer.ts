@@ -86,6 +86,11 @@ interface ActiveSession extends CallRecord {
   userSpeaking?: boolean;
   /** 確定テキストが来ないまま表示が残らないようにする保険タイマー。 */
   speakingTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * 「お客様発話中」が音量だけでなく認識の実働（途中経過）でも裏付けられたか。
+   * 音量だけの点灯は短めに消す（物音の誤点灯を8秒も残さないため）。
+   */
+  speakingConfirmed?: boolean;
   /** アバターが発話中か（キオスクのマイクが自分の声を拾うため、その間は発話中表示を止める）。 */
   avatarSpeaking?: boolean;
   /**
@@ -98,6 +103,14 @@ interface ActiveSession extends CallRecord {
 
 /** 「お客様発話中」が確定テキストなしで残り続けないようにする上限。 */
 const USER_SPEAKING_MAX_MS = 8_000;
+/**
+ * 音量だけで点いた（認識の実働＝途中経過がまだ無い）場合の上限。
+ *
+ * ★2026-08-14 の基本性能テストで、誰も話していないのに点く誤点灯が観察された。
+ * 物音でも音量は超えるため、認識が動き出さないまま8秒残るのは長すぎる。
+ * 途中経過が届いた時点で「本物の発話」とみなし、上の8秒に切り替える。
+ */
+const USER_SPEAKING_UNCONFIRMED_MS = 3_000;
 
 const callQueue = new Map<string, CallRecord>();
 // 呼び出しの未応答タイムアウト。係員が在席していても誰も応答しない場合、お客様を
@@ -239,9 +252,19 @@ function disconnectReasonJa(reason: string): string {
 /** 表示状態を変えて係員に伝える（変化があったときだけ送る）。 */
 function setUserSpeaking(sessionId: string, session: ActiveSession, speaking: boolean): void {
   if (session.speakingTimer) { clearTimeout(session.speakingTimer); session.speakingTimer = undefined; }
+  if (!speaking) session.speakingConfirmed = false; // 次の点灯はまた「音量だけ」から始まる
   if (session.userSpeaking === speaking) return;
   session.userSpeaking = speaking;
   io.to(session.staffSocketId).emit("user:speaking", { sessionId, speaking });
+}
+
+/** 「お客様発話中」の保険タイマーを張り直す（裏付けの有無で長さを変える）。 */
+function armSpeakingTimer(sessionId: string, session: ActiveSession): void {
+  if (session.speakingTimer) clearTimeout(session.speakingTimer);
+  session.speakingTimer = setTimeout(() => {
+    session.speakingTimer = undefined;
+    setUserSpeaking(sessionId, session, false);
+  }, session.speakingConfirmed ? USER_SPEAKING_MAX_MS : USER_SPEAKING_UNCONFIRMED_MS);
 }
 
 /** 通話終了時にタイマーを止める（残ったタイマーが後から発火しないように）。 */
@@ -262,10 +285,7 @@ function noteVoiceActivity(socketId: string): void {
       if (session.avatarSpeaking) return;
       setUserSpeaking(sessionId, session, true);
       // 確定テキストが来ないまま（騒音の誤検知など）残り続けないようにする保険
-      session.speakingTimer = setTimeout(() => {
-        session.speakingTimer = undefined;
-        setUserSpeaking(sessionId, session, false);
-      }, USER_SPEAKING_MAX_MS);
+      armSpeakingTimer(sessionId, session);
       return;
     }
     if (session.staffSocketId === socketId) {
@@ -275,6 +295,41 @@ function noteVoiceActivity(socketId: string): void {
       io.to(session.userSocketId).emit("staff:composing", { sessionId, active: true });
       return;
     }
+  }
+}
+
+/**
+ * お客様側の音声認識の途中経過を受けたとき（sttStream から）。
+ *
+ * ★2026-08-14 の基本性能テスト対策。係員には確定テキストしか届かず、お客様が
+ * 話し終えて確定が出るまでの約2秒間「話したことすら分からない」ため、係員が
+ * かぶせて話してしまう事故が多発した。途中経過を係員画面にそのまま流す
+ * （係員画面の表示側は当初から対応済みで、送る側が無かった）。
+ *
+ * 翻訳はしない：途中経過は数秒ごとに書き換わるうえ、目的は「今まさに話している」
+ * ことを係員に見せることにある。訳文は確定時に付く。
+ */
+function noteUserInterim(socketId: string, transcript: string): void {
+  for (const [sessionId, session] of activeSessions) {
+    if (session.userSocketId !== socketId) continue;
+    // 空文字＝消去の合図（確定が見張りに破棄された・マイクOFF）。表示済みの途中経過を
+    // 消し、発話中表示も下ろす。これが無いと、破棄された発話の書きかけが係員画面に残る。
+    if (!transcript) {
+      io.to(session.staffSocketId).emit("speech:user", {
+        sessionId, text: "", lang: session.userLang, isFinal: false,
+      });
+      setUserSpeaking(sessionId, session, false);
+      return;
+    }
+    if (session.avatarSpeaking) return; // アバターの声を拾った分は流さない（発話中表示と同じ扱い）
+    io.to(session.staffSocketId).emit("speech:user", {
+      sessionId, text: transcript, lang: session.userLang, isFinal: false,
+    });
+    // 認識が実際に動いている＝物音ではなく発話。表示の保険を「確定待ち」の長さに延ばす
+    session.speakingConfirmed = true;
+    setUserSpeaking(sessionId, session, true);
+    armSpeakingTimer(sessionId, session);
+    return;
   }
 }
 
@@ -707,7 +762,12 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     // ── Streaming STT (real-time, glossary-aware, long-form) ──────────────────
     // 音量から「お客様が話している」ことを検知したら係員画面に知らせる。マイクのON/OFF
     // ではなく実際の声で判定するので、将来キオスクのマイクを常時ONにしても そのまま動く。
-    registerSttHandlers(socket, () => noteVoiceActivity(socket.id));
+    registerSttHandlers(
+      socket,
+      () => noteVoiceActivity(socket.id),
+      // お客様側の途中経過を係員画面へ（係員側のソケットでは該当セッションが無く何もしない）
+      (transcript) => noteUserInterim(socket.id, transcript),
+    );
 
     // ── Staff joins ───────────────────────────────────────────────────────────
     socket.on("staff:join", async (payload?: { name?: string; uid?: string; stationIds?: string[] }) => {

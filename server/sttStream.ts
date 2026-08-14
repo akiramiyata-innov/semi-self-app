@@ -175,7 +175,19 @@ export function isDegenerateRun(text: string): boolean {
  * adaptation so domain words (station names, jargon) are recognized correctly —
  * this is what the classic V1 phrase hints failed to do.
  */
-export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void): void {
+export function registerSttHandlers(
+  socket: Socket,
+  onVoiceActivity?: () => void,
+  /**
+   * ゲートを通った途中経過（interim）が出たときに呼ばれる。
+   *
+   * ★2026-08-14 の基本性能テストで「係員がお客様の発話にかぶせて話してしまう」が
+   * 多発した対策。係員には確定テキストしか届かず、お客様が話し終えてから確定が出る
+   * までの約2秒間、話したことすら分からなかった。途中経過は無音ゲートを通った
+   * 「実際に声がある」証拠なので、これを合図に係員画面へ流す。
+   */
+  onInterim?: (transcript: string) => void,
+): void {
   let stream: SpeechStream | null = null;
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
   let lang = "ja-JP";
@@ -206,6 +218,16 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
   };
   // 「お客様発話中」表示用：発話音量が連続したチャンク数（0.2秒＝2チャンク続いたら通知）
   let voiceRun = 0;
+  /**
+   * マイクON直後は「発話中」の通知を出さない猶予。
+   *
+   * ★2026-08-14 の基本性能テストで「通話開始と同時に、誰も話していないのに
+   * 『お客様発話中』が点く」が観察された。通話成立と同時にマイクが自動でONになり、
+   * 起動直後の機器音・音量の自動調整のゆらぎを声と数えてしまうため。
+   * 猶予の間も音声認識そのものは全チャンクを送っている（表示の判定だけを待たせる）。
+   */
+  const VOICE_BADGE_WARMUP_MS = Number(process.env.STT_VOICE_BADGE_WARMUP_MS ?? "1000");
+  let micStartedAt = 0;
   /**
    * ストリームが開くまでの音声を貯めておく置き場。
    *
@@ -273,6 +295,7 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
         if (!verdict.accept) {
           console.log(`[stt-gate] 無音区間のため破棄 speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)}${cont} raw=${JSON.stringify(raw)}`);
           recordGuard("stt-guard-gate", `無音区間の認識結果を破棄（幻聴とみなした）: "${raw.slice(0, 60)}" speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)}${cont}`);
+          onInterim?.("");  // 表示済みの途中経過を消す（確定は破棄したため）
           return;
         }
         // 用語集オウム返しガード：ヒント一覧をそのまま読み上げた形の暴走出力は破棄する。
@@ -280,12 +303,14 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
         if (dump.isDump) {
           console.log(`[stt-dump] 用語集の羅列とみなし破棄 hits=${dump.hits} other=${dump.otherRatio.toFixed(2)} raw=${JSON.stringify(raw)}`);
           recordGuard("stt-guard-dump", `用語集の羅列とみなし破棄: "${raw.slice(0, 60)}" hits=${dump.hits}`);
+          onInterim?.("");  // 表示済みの途中経過を消す（確定は破棄したため）
           return;
         }
         // 暴走出力ガード：数字の連番のような同種文字の羅列は幻聴（自信度も高く出るため先に判定）。
         if (isDegenerateRun(base)) {
           console.log(`[stt-run] 連番・繰り返しの暴走とみなし破棄 raw=${JSON.stringify(raw.slice(0, 60))}${raw.length > 60 ? "…" : ""}`);
           recordGuard("stt-guard-run", `連番・繰り返しの暴走とみなし破棄: "${raw.slice(0, 60)}"`);
+          onInterim?.("");  // 表示済みの途中経過を消す（確定は破棄したため）
           return;
         }
         // 自信度ガード：ささやき・息・衣擦れ等の「続く音」は無音ゲートを通るため、
@@ -299,6 +324,7 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
           const why = `confidence=${confidence.toFixed(3)} 基準=${minConfidence}（${clearVoice ? "明らかな声" : "音量が微妙"} speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)}）`;
           console.log(`[stt-conf] 自信度が低いため破棄 ${why} raw=${JSON.stringify(raw)}`);
           recordGuard("stt-guard-conf", `自信度が低いため破棄（幻聴とみなした）: "${raw.slice(0, 60)}" ${why}`);
+          onInterim?.("");  // 表示済みの途中経過を消す（確定は破棄したため）
           return;
         }
         // 確定時のみ、読み照合（kuromoji）で同音の別漢字も矯正する。
@@ -316,6 +342,7 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
         if (inspectGlossaryDump(base, phrases).isDump) return;
         if (isDegenerateRun(base)) return;
         socket.emit("stt:interim", { transcript: base });
+        onInterim?.(base); // ゲートを通った途中経過＝「実際に話している」確かな合図
       }
     });
     s.on("error", (err: Error) => {
@@ -359,6 +386,7 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
 
   function stopStream(): void {
     running = false;
+    onInterim?.(""); // 表示済みの途中経過を消す（マイクOFF後に確定が来ない場合の残留防止）
     pendingAudio = []; // 次にONにしたとき、前回の言い残しが混ざらないように捨てる
     if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
     const s = stream;
@@ -373,6 +401,8 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
     running = true;
     consecutiveErrors = 0;
     gate.reset();      // マイクON時に音量計測をやり直す
+    micStartedAt = Date.now();
+    voiceRun = 0;
     pendingAudio = [];
     const terms = await getGlossaryTermsFresh().catch(() => [] as GlossaryTerm[]);
     phrases = terms.map((t) => t.ja).filter(Boolean);
@@ -403,7 +433,10 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
     // 消すのは確定テキストが出たとき（socketServer側で判断）なので、ここでは点灯のみ通知する。
     if (rms >= SPEECH_RMS) {
       voiceRun++;
-      if (voiceRun >= MIN_SPEECH_CHUNKS) onVoiceActivity?.();
+      // マイクON直後の猶予中は「発話中」の通知だけ止める（認識・性能測定はそのまま）
+      if (voiceRun >= MIN_SPEECH_CHUNKS && Date.now() - micStartedAt >= VOICE_BADGE_WARMUP_MS) {
+        onVoiceActivity?.();
+      }
       // 性能測定：声が聞こえた最後の時刻＝発話終了の基準（無音では更新しない）
       noteSttSpeech(socket.id);
     } else {
