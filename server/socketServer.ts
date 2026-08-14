@@ -896,6 +896,42 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         return;
       }
 
+      /**
+       * ★同じ端末の「残骸」を先に片付ける（2026-08-14 基本性能テスト 日本語S6）。
+       *
+       * 通信の瞬断でお客様のクライアントが繋ぎ直すと、新しい接続で呼び出し直してくる。
+       * このとき前の通話は、切断の検知（数秒〜十数秒）が終わるまでサーバーに残っており、
+       * 従来はそのまま新しい通話を作っていた。結果、**同じお客様の通話が2つ並び**、
+       * 係員画面が「同じお客様で2画面」になって混乱した（実測: 前の通話の終了4秒前に
+       * 次の呼び出しが来ていた）。キオスクは1画面1通話なので、同じ端末からの新しい
+       * 呼び出しは「前の通話のお客様側はもう存在しない」ことの確かな証拠。先に終わらせる。
+       */
+      activeSessions.forEach((old, oldId) => {
+        if (old.machineId !== payload.machineId) return;
+        activeSessions.delete(oldId);
+        clearSpeakingState(old);
+        releaseSession(oldId, old.staffSocketId);
+        metrics.noteDisconnect(oldId); // 実態は切断由来の終了なので、切断として数える
+        recordAppError({
+          type: "disconnect", sessionId: oldId, machineName: old.machineName,
+          staffName: staffNameOfSession(old), side: "user",
+          detail: "同じ端末から新しい呼び出しが来たため、残っていた前の通話を終了した（通信の瞬断でお客様側が繋ぎ直したときの後片付け）",
+        });
+        io.to(old.staffSocketId).emit("call:userDisconnected", { sessionId: oldId, machineName: old.machineName });
+        io.to(`session:${oldId}`).emit("call:ended", { sessionId: oldId });
+        io.to("call-queue").emit("call:ended", { sessionId: oldId });
+        saveSessionLog(old).catch((e) => console.error("[log] 幽霊通話の保存に失敗:", e));
+        console.log(`[call] 同じ端末からの再呼び出しにより前の通話を終了: ${old.machineName} (${oldId})`);
+      });
+      // 応答前の古い呼び出しも同様（鳴りっぱなしの着信カードを取り下げる）
+      callQueue.forEach((rec, oldId) => {
+        if (rec.machineId !== payload.machineId) return;
+        callQueue.delete(oldId);
+        clearCallTimeout(oldId);
+        io.to("call-queue").emit("call:taken", { sessionId: oldId });
+        console.log(`[call] 同じ端末からの再呼び出しにより古い呼び出しを取り下げ: ${rec.machineName} (${oldId})`);
+      });
+
       const sessionId = generateSessionId();
       const record: CallRecord = {
         sessionId,
@@ -1018,18 +1054,28 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       // the kiosk user (キャンセルボタン). Blocks a race-losing *other* staff from tearing
       // down someone else's live call, without blocking the legitimate participants.
       if (session && session.staffSocketId !== socket.id && session.userSocketId !== socket.id) return;
+      /**
+       * ★2026-08-14 基本性能テスト（日本語S7）で見つけた二重保存の防止。
+       * 従来は「保存(await・数秒)→一覧から削除」の順だったため、保存を待っている間に
+       * **もう一方の参加者の call:end**（お客様と係員がほぼ同時に終了ボタン）や切断処理が
+       * 入り込むと、通話がまだ一覧にあるため保存が二重に走った。測定値は takeMetrics() が
+       * 取り出すと消える作りなので、**2回目の保存が空の測定値で記録を上書き**していた
+       * （S7: 会話10件は無事なのに STT/TTS計測が0回）。先に一覧から外して
+       * 「この終了処理が唯一」であることを確定させてから、通知→保存の順に行う。
+       */
       if (session) {
-        await saveSessionLog(session);
+        activeSessions.delete(sessionId);
+        clearSpeakingState(session);
         releaseSession(sessionId, session.staffSocketId);
       }
-      clearSpeakingState(session);
-      activeSessions.delete(sessionId);
       callQueue.delete(sessionId);
       clearCallTimeout(sessionId);
       io.to(`session:${sessionId}`).emit("call:ended", { sessionId });
       io.to("call-queue").emit("call:ended", { sessionId }); // Notify all staff to clear the call
       socket.leave(`session:${sessionId}`);
       broadcastStaffList();
+      // 保存は最後（通知を待たせない）。この時点で一覧からは外れているので二重保存は起きない
+      if (session) await saveSessionLog(session);
     });
 
     // ── Speech: user → staff ──────────────────────────────────────────────────

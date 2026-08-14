@@ -428,11 +428,43 @@ export default function StaffPage() {
   }, [stopMic, startMic]);
 
   // ── Socket setup ─────────────────────────────────────────────────────────
+  /** 一度でも接続したことがあるか（connect イベントが「再接続」かどうかの判定に使う）。 */
+  const hadConnectedRef = useRef(false);
+  // 通話中のセッションの控え。再接続時の掃除（下の connect）と、スペースキーの
+  // ショートカット（下方）から、描画中の状態に触れずに最新の中身を読むために使う。
+  const activeSessionsRef = useRef(activeSessions);
+  useEffect(() => { activeSessionsRef.current = activeSessions; }, [activeSessions]);
   useEffect(() => {
     const s = io({ path: "/socket.io", transports: ["websocket", "polling"] });
     socketRef.current = s;
 
     s.on("connect", () => {
+      /**
+       * ★再接続（初回以外の connect）のときは、画面に残っている通話パネルを全部消す。
+       *
+       * 2026-08-14 の基本性能テスト（日本語S6）で、通信の瞬断のたびに古い通話パネルが
+       * 画面に残り、お客様の再呼び出しと合わせて「同じお客様で2画面」になった。
+       * 接続が切れた時点でサーバーは古い接続の通話を終了扱いにしており、繋ぎ直した
+       * この画面から古いパネルの通話を続ける手段は無い（マイクも文字も届かない）。
+       * つまり再接続後に残っているパネルは全て幽霊。掃除してから staff:join し直す。
+       * 応答前の着信は staff:join のときにサーバーが送り直してくれるので消してよい。
+       */
+      if (hadConnectedRef.current) {
+        const hadPanels = activeSessionsRef.current.size > 0;
+        setActiveSessions(new Map());
+        setCallQueue([]);
+        setPreviewFaceFrames(new Map());
+        if (activeListeningSession.current) {
+          stopMic();
+          activeListeningSession.current = null;
+          setActiveListeningId(null);
+          micOnRef.current = false;
+        }
+        if (hadPanels) {
+          addToast("通信が切れたため、進行中の通話は終了しました。お客様には再度の呼び出しが案内されています。", "warning");
+        }
+      }
+      hadConnectedRef.current = true;
       // staff:join is emitted by the initialDataLoaded effect (not here), so we
       // never register with an empty station list before assignments have loaded.
       setConnected(true);
@@ -795,8 +827,6 @@ export default function StaffPage() {
 
   // Space key shortcut: toggle mic (not when typing in input)
   // Uses refs so the handler is always registered once and reads latest values.
-  const activeSessionsRef = useRef(activeSessions);
-  useEffect(() => { activeSessionsRef.current = activeSessions; }, [activeSessions]);
   const startMicRef = useRef(startMic);
   useEffect(() => { startMicRef.current = startMic; }, [startMic]);
   const stopMicRef = useRef(stopMic);

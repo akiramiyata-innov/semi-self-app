@@ -324,7 +324,15 @@ export function registerSttHandlers(
         // 自信度が無い/0のときは破棄しない（モデルや言語により返さない場合の安全側）。
         const confidence = r.alternatives?.[0]?.confidence ?? null;
         // 音量と長さが「明らかに人の声」なら、自信度が低くても本物として通す。
-        const clearVoice = verdict.maxRms >= CLEAR_VOICE_RMS && verdict.speechChunks >= CLEAR_VOICE_CHUNKS;
+        //
+        // ★ただし分割確定の引き継ぎ（continuation）には適用しない（2026-08-14 日本語S8）。
+        // 引き継ぎ分の音量・長さは**前の発話のもの**であり、この確定自身の裏付けではない。
+        // 緩い基準のまま通すと、本物の発話の直後にモデルが幻聴した短い相づち
+        // （「はい」「うん」）まで「続き」として素通りし、話していない言葉が表示された。
+        // 引き継ぎ分は常に厳しい基準（0.80）を課す。本物の続き（実際に話した言葉）は
+        // 自信度が高く出るので生き残る。効果は [stt-diag]/[stt-conf] の conf= で検証する。
+        const clearVoice = !verdict.continuation
+          && verdict.maxRms >= CLEAR_VOICE_RMS && verdict.speechChunks >= CLEAR_VOICE_CHUNKS;
         const minConfidence = clearVoice ? MIN_CONFIDENCE_CLEAR : MIN_CONFIDENCE;
         if (confidence != null && confidence > 0 && confidence < minConfidence) {
           const why = `confidence=${confidence.toFixed(3)} 基準=${minConfidence}（${clearVoice ? "明らかな声" : "音量が微妙"} speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)}）`;
