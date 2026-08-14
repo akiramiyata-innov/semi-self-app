@@ -32,6 +32,32 @@ const BOOST = 20;
 // 捨てる」側を厚くできる。基本性能テストで [stt-diag] の conf= を集めたら見直す。
 const MIN_CONFIDENCE = Number(process.env.STT_MIN_CONFIDENCE ?? "0.80");
 
+/**
+ * ★2026-08-14 の基本性能テスト（英語8通話）で 0.80 の根拠が崩れたため、音量と
+ * 組み合わせた二段構えにした。
+ *
+ * **測ってわかったこと**（Railwayログの全量。採用158件・自信度で破棄9件）:
+ * - 採用された本物の自信度は 英語 n=82 で最小 **0.837**、日本語 n=76 で最小 **0.814**。
+ *   つまり 0.80 は「本物の下限のすぐ下」に貼り付いており、余裕がまったく無かった。
+ * - 自信度で破棄した9件のうち **8件が本物**（0.394〜0.800。例:「okay from which track
+ *   do the sinjuku line trains depart」0.774 が丸ごと消え、会話が混乱した）。
+ *   明らかな幻聴は「wah」0.091 の1件だけ。
+ * - 一方 **本物158件は例外なく maxRms≥1059 かつ発話チャンク≥5（0.5秒）**だった
+ *   （中央値は maxRms 6887・30チャンク）。音量と長さは自信度よりはっきり分かれる。
+ *
+ * そこで「明らかに人の声」と言える音量と長さがあれば、聞き取りにくくて自信度が
+ * 低い確定でも通す。ささやき・息・衣擦れ・単発の物音（＝自信度ガードが本来ねらう
+ * 相手）はこの条件を満たさないので、そちらには従来どおり 0.80 を課す。
+ *
+ * **残る危険と、その見張り方**: 2026-08-04 の物音テストでは幻聴が 0.661・0.739 を
+ * 出している。0.5秒以上続く大音量の物音であればすり抜けうる。次の測定で判断できるよう、
+ * 破棄・採用の両方のログに maxRms と発話チャンク数を残してある（[stt-conf]/[stt-diag]）。
+ */
+const CLEAR_VOICE_RMS = Number(process.env.STT_CLEAR_VOICE_RMS ?? "1000");
+const CLEAR_VOICE_CHUNKS = Number(process.env.STT_CLEAR_VOICE_CHUNKS ?? "5");
+/** 「明らかに人の声」だったときの自信度しきい値。 */
+const MIN_CONFIDENCE_CLEAR = Number(process.env.STT_MIN_CONFIDENCE_CLEAR ?? "0.50");
+
 type SpeechStream = ReturnType<v2.SpeechClient["_streamingRecognize"]>;
 
 /** Minimal shape of a V2 StreamingRecognizeResponse we consume. */
@@ -242,9 +268,11 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
         // 無音ゲート：発話音量が観測されていない区間の確定結果は、モデルの幻聴
         // （無音・微小雑音からの創作。数の読み上げ・あいづち・挨拶など）とみなし破棄する。
         const verdict = gate.onFinal();
+        // 分割確定（同じ音声から続けて出た2つ目）は、直前の判定を引き継いでいる印。
+        const cont = verdict.continuation ? " 分割確定(前の判定を引き継ぎ)" : "";
         if (!verdict.accept) {
-          console.log(`[stt-gate] 無音区間のため破棄 speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)} raw=${JSON.stringify(raw)}`);
-          recordGuard("stt-guard-gate", `無音区間の認識結果を破棄（幻聴とみなした）: "${raw.slice(0, 60)}" speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)}`);
+          console.log(`[stt-gate] 無音区間のため破棄 speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)}${cont} raw=${JSON.stringify(raw)}`);
+          recordGuard("stt-guard-gate", `無音区間の認識結果を破棄（幻聴とみなした）: "${raw.slice(0, 60)}" speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)}${cont}`);
           return;
         }
         // 用語集オウム返しガード：ヒント一覧をそのまま読み上げた形の暴走出力は破棄する。
@@ -264,9 +292,13 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
         // その先はモデルの自信度で見分ける（実発話は極小音量でも0.91以上・幻聴は0.67〜）。
         // 自信度が無い/0のときは破棄しない（モデルや言語により返さない場合の安全側）。
         const confidence = r.alternatives?.[0]?.confidence ?? null;
-        if (confidence != null && confidence > 0 && confidence < MIN_CONFIDENCE) {
-          console.log(`[stt-conf] 自信度が低いため破棄 confidence=${confidence.toFixed(3)} raw=${JSON.stringify(raw)}`);
-          recordGuard("stt-guard-conf", `自信度が低いため破棄（幻聴とみなした）: "${raw.slice(0, 60)}" confidence=${confidence.toFixed(3)}`);
+        // 音量と長さが「明らかに人の声」なら、自信度が低くても本物として通す。
+        const clearVoice = verdict.maxRms >= CLEAR_VOICE_RMS && verdict.speechChunks >= CLEAR_VOICE_CHUNKS;
+        const minConfidence = clearVoice ? MIN_CONFIDENCE_CLEAR : MIN_CONFIDENCE;
+        if (confidence != null && confidence > 0 && confidence < minConfidence) {
+          const why = `confidence=${confidence.toFixed(3)} 基準=${minConfidence}（${clearVoice ? "明らかな声" : "音量が微妙"} speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)}）`;
+          console.log(`[stt-conf] 自信度が低いため破棄 ${why} raw=${JSON.stringify(raw)}`);
+          recordGuard("stt-guard-conf", `自信度が低いため破棄（幻聴とみなした）: "${raw.slice(0, 60)}" ${why}`);
           return;
         }
         // 確定時のみ、読み照合（kuromoji）で同音の別漢字も矯正する。
@@ -275,7 +307,7 @@ export function registerSttHandlers(socket: Socket, onVoiceActivity?: () => void
         // 生の認識結果(raw)→かな漢字補正(corrected)→読み照合(final)を段階で記録。
         // 話していない登録語が混入した場合、それが raw の時点で入っているか（＝モデル側か
         // 後処理側か）を切り分けるためのログ。confidence は自信度ガードの調整用に常時記録。
-        console.log(`[stt-diag] speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)} conf=${confidence == null ? "-" : confidence.toFixed(3)} raw=${JSON.stringify(raw)} corrected=${JSON.stringify(base)} final=${JSON.stringify(transcript)}`);
+        console.log(`[stt-diag] speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)} conf=${confidence == null ? "-" : confidence.toFixed(3)} 基準=${minConfidence}${cont} raw=${JSON.stringify(raw)} corrected=${JSON.stringify(base)} final=${JSON.stringify(transcript)}`);
         socket.emit("stt:final", { transcript });
         noteSttFinal(socket.id); // 性能測定：発話終了→確定テキスト
       } else {

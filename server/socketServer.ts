@@ -316,11 +316,20 @@ async function translateText(text: string, from: string, to: string): Promise<st
  * 日本語などの語は区切りの概念がないのでそのまま一致させる。
  */
 function glossaryPattern(src: string): RegExp {
-  const escaped = src.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const latinOnly = /^[A-Za-z0-9 .'-]+$/.test(src);
-  return latinOnly
-    ? new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, "gi")
-    : new RegExp(escaped, "gi");
+  if (!latinOnly) return new RegExp(esc(src), "gi");
+  /**
+   * ★語の区切り（空白・ハイフン）は表記が揺れるので、どの書き方でも一致させる。
+   *
+   * 2026-08-14 の基本性能テストで、英語の音声認識は駅名を **"bakuro-yokoyama"**
+   * "mamiana cho" と区切って書き出していたのに、登録が "BAKUROYOKOYAMA"
+   * "MAMIANACHOU" と続けた形だったため、英語→日本語の訳語固定が一度も効かず
+   * 「バクロ横山」「マミアナチョー」というカタカナ訳になっていた。
+   * 区切りを緩く見れば、登録をどちらの書き方にしても取りこぼさない。
+   */
+  const flexible = src.split(/[\s-]+/).filter(Boolean).map(esc).join("[\\s-]*");
+  return new RegExp(`(?<![A-Za-z0-9])${flexible}(?![A-Za-z0-9])`, "gi");
 }
 
 async function translateWithGlossary(text: string, fromLang: string, toLang: string): Promise<string> {
@@ -360,6 +369,34 @@ async function translateWithGlossary(text: string, fromLang: string, toLang: str
   const fromCode = getGoogleTranslateLangCode(fromLang as LangCode);
   const toCode = getGoogleTranslateLangCode(toLang as LangCode);
   let result = await translateText(processed, fromCode, toCode);
+
+  /**
+   * 目印の生き残りを確かめる。
+   *
+   * ★2026-08-14 の基本性能テストで実害が出た。`[[4]]`（一覧の4番目＝馬喰横山）が
+   * 翻訳の途中で **"station 4"** に書き換えられ、戻し処理が目印を見つけられずに素通り。
+   * お客様には「急行は station 4 に停まりません」と流れた。戻せなかったことに
+   * 気づく仕組みが無く、記録にも残らなかったのが問題の本体。
+   *
+   * 壊れていたら、**用語集なしで訳し直す**。訳語の固定はあきらめることになるが、
+   * 「station 4」のような無関係な語が混じるよりはるかにましで、Google 自身の訳
+   * （Bakuroyokoyama 等）に落ち着く。あわせて障害履歴に残し、再発を見えるようにする。
+   */
+  const broken = replacements.filter(({ placeholder }) => !result.includes(placeholder));
+  if (broken.length > 0) {
+    console.error(
+      `[translate] 用語集の目印が翻訳で壊れた（${broken.length}/${replacements.length}件・${fromLang}→${toLang}）` +
+        ` 壊れた目印=${broken.map((b) => b.placeholder).join(",")} 訳文=${JSON.stringify(result.slice(0, 120))}`
+    );
+    recordAppError({
+      type: "translate-glossary",
+      detail:
+        `用語集の訳語を固定できなかった（目印が翻訳で壊れた・${fromLang}→${toLang}）: ` +
+        `対象語「${broken.map((b) => b.target).join("、").slice(0, 40)}」。用語集なしで訳し直した`,
+    });
+    return await translateText(text, fromCode, toCode);
+  }
+
   replacements.forEach(({ placeholder, target }) => {
     result = result.split(placeholder).join(target);
   });

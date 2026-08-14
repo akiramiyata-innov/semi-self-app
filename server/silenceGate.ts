@@ -41,6 +41,8 @@ export interface GateVerdict {
   speechChunks: number;
   /** 前回の確定以降に観測した最大RMS（しきい値調整用）。 */
   maxRms: number;
+  /** true = 分割確定（同じ音声の続き）とみなし、直前の判定を引き継いだ。 */
+  continuation?: boolean;
 }
 
 export class SilenceGate {
@@ -50,9 +52,27 @@ export class SilenceGate {
   // 認め、それまでの分をまとめて times へ移す。単発（クリック音等）はここで捨てられる。
   private pending: number[] = [];
   private runQualified = false;
+  /**
+   * 直前の確定以降に観測した音声チャンク数と、そのときの判定。
+   *
+   * ★2026-08-14 の基本性能テスト（英語8通話）で判明した取り逃しの対策。chirp_2 は
+   * 1つの発話を **2つの確定に分けて返すことがある**（実測: 「…my card just got stuck
+   * in the」＋「ticket vending machine and so doesn't come out what should i do」）。
+   * onFinal() が窓をリセットするため、後半は音量の根拠を失い speech=0 maxRms=0 で
+   * **必ず破棄**されていた。本物の発話11件がこれで消え、英語の発話の約17%が係員に
+   * 届いていなかった（Railwayログで全件確認。破棄と直前の採用の間隔は全件0.0秒）。
+   *
+   * 見分け方＝**音声チャンクが1つも届かないうちに次の確定が来たか**。マイクONの間
+   * チャンクは約100msごとに必ず届くので、幻聴が起きる「無音区間」では必ず何チャンクか
+   * 観測される（実測: 破棄した本物の幻聴は maxRms=123 と 215＝チャンクは届いていた）。
+   * 逆にチャンクが0個なら、それは同じ音声から続けて出た分割確定でしかありえない。
+   */
+  private chunksSinceFinal = 0;
+  private lastVerdict: GateVerdict | null = null;
 
   /** 音声チャンクを1つ観測するたびに呼ぶ。 */
   onChunk(rms: number, now: number = Date.now()): void {
+    this.chunksSinceFinal++;
     if (rms > this.maxRms) this.maxRms = rms;
     if (rms >= SPEECH_RMS) {
       if (this.runQualified) {
@@ -82,11 +102,19 @@ export class SilenceGate {
 
   /** 確定結果の採否を判定する。呼ぶと窓はリセットされ、次の発話の計測が始まる。 */
   onFinal(now: number = Date.now()): GateVerdict {
+    // 分割確定：前の確定から音声が1チャンクも届いていない＝同じ音声の続き。新たに
+    // 音量を観測しようがないので、直前の判定をそのまま引き継ぐ（本物なら本物、
+    // 幻聴なら幻聴の続きとして扱う）。窓は前の確定で空になったままにしておく。
+    if (this.chunksSinceFinal === 0 && this.lastVerdict) {
+      return { ...this.lastVerdict, continuation: true };
+    }
     const cutoff = now - SPEECH_WINDOW_MS;
     const speechChunks = this.times.filter((t) => t >= cutoff).length;
     const verdict: GateVerdict = { accept: speechChunks >= MIN_SPEECH_CHUNKS, speechChunks, maxRms: this.maxRms };
     this.times = [];
     this.maxRms = 0;
+    this.chunksSinceFinal = 0;
+    this.lastVerdict = verdict;
     // pending / runQualified は消さない：話し続けている最中に確定が来た場合、続きの
     // チャンクは同じ発話の一部なので、次の確定に向けてそのまま数え続ける。
     return verdict;
@@ -98,5 +126,7 @@ export class SilenceGate {
     this.maxRms = 0;
     this.pending = [];
     this.runQualified = false;
+    this.chunksSinceFinal = 0;
+    this.lastVerdict = null;
   }
 }
