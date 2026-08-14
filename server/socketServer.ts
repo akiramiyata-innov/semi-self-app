@@ -334,7 +334,27 @@ function noteUserInterim(socketId: string, transcript: string): void {
 }
 
 // ── Google APIs ───────────────────────────────────────────────────────────────
-async function translateText(text: string, from: string, to: string): Promise<string> {
+
+/**
+ * HTML方式で訳したとき、翻訳結果から保護用の印を取り除いて素の文に戻す。
+ *
+ * - `<span translate="no">…</span>` を外す（中身の目印はそのまま残す）
+ * - HTMLの実体参照を文字に戻す（HTML方式では `'` が `&#39;` で返るため。
+ *   `&amp;` は最後に戻す：先に戻すと `&amp;lt;` のような二重表記を壊す）
+ * - 目印の直後に入る余分な空白を詰める（実測: 「… does not stop at [[4]] .」のように
+ *   句点の前に空白が入る。`.` `,` `。` `、` の前は8言語のいずれでも空白を置かない）
+ */
+function stripProtectionMarkup(s: string): string {
+  let out = s.replace(/<\/?span\b[^>]*>/gi, "");
+  out = out
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&");
+  return out.replace(/[  ]+([.,。、])/g, "$1");
+}
+
+async function translateText(
+  text: string, from: string, to: string, format: "text" | "html" = "text",
+): Promise<string> {
   if (from === to) return text;
   const cached = getCached(text, from, to);
   if (cached) return cached;
@@ -349,14 +369,15 @@ async function translateText(text: string, from: string, to: string): Promise<st
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ q: text, source: from, target: to, format: "text" }),
+    body: JSON.stringify({ q: text, source: from, target: to, format }),
   });
   const json = await res.json() as { data?: { translations?: Array<{ translatedText: string }> }; error?: { message: string } };
   if (json.error) {
     console.error(`[translate] API error [${from}→${to}]: ${json.error.message}`);
     throw new Error(`Translation API error: ${json.error.message}`);
   }
-  const translated = json.data?.translations?.[0]?.translatedText ?? text;
+  const raw = json.data?.translations?.[0]?.translatedText ?? text;
+  const translated = format === "html" ? stripProtectionMarkup(raw) : raw;
   console.log(`[translate] "${text}" → "${translated}" [${from}→${to}]`);
   setCache(text, from, to, translated);
   return translated;
@@ -423,7 +444,28 @@ async function translateWithGlossary(text: string, fromLang: string, toLang: str
 
   const fromCode = getGoogleTranslateLangCode(fromLang as LangCode);
   const toCode = getGoogleTranslateLangCode(toLang as LangCode);
-  let result = await translateText(processed, fromCode, toCode);
+
+  /**
+   * ★2026-08-14 に方式を変更。目印をむき出しの `[[4]]` で渡すテキスト方式では、
+   * 翻訳サービスに「ここは訳すな」と伝える手段が無く、目印そのものが書き換えられていた
+   * （本番の実文で再現: 「急行は[[4]]に停まりません」→ "…does not stop at station 4."
+   * が **8回中8回**。英・中簡体・中繁体・仏・西・タイの6言語で発生し、韓国語のみ無事）。
+   *
+   * HTML方式なら `translate="no"` が正式な「訳すな」の指示として効く（同じ文で8回中0回）。
+   * 手順＝①素の文を用語→目印に置換 ②文全体をHTMLエスケープ ③目印を span で包む。
+   * この順にすると、元の文に `<` や `&` が含まれていても壊れない（目印はASCIIなので
+   * エスケープの影響を受けない）。訳文からは span と実体参照を戻して素の文にする。
+   */
+  const useHtml = replacements.length > 0;
+  if (useHtml) {
+    processed = processed
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    for (const { placeholder } of replacements) {
+      processed = processed.split(placeholder).join(`<span translate="no">${placeholder}</span>`);
+    }
+  }
+
+  let result = await translateText(processed, fromCode, toCode, useHtml ? "html" : "text");
 
   /**
    * 目印の生き残りを確かめる。
@@ -432,6 +474,10 @@ async function translateWithGlossary(text: string, fromLang: string, toLang: str
    * 翻訳の途中で **"station 4"** に書き換えられ、戻し処理が目印を見つけられずに素通り。
    * お客様には「急行は station 4 に停まりません」と流れた。戻せなかったことに
    * 気づく仕組みが無く、記録にも残らなかったのが問題の本体。
+   *
+   * 原因そのものは上の HTML方式（translate="no"）で塞いだが、この検査は**安全網として
+   * 残す**。翻訳サービスの挙動は将来変わりうるし、壊れたときに黙って別の語が流れる
+   * （＝誰も気づけない）のが今回いちばんの問題だったため。
    *
    * 壊れていたら、**用語集なしで訳し直す**。訳語の固定はあきらめることになるが、
    * 「station 4」のような無関係な語が混じるよりはるかにましで、Google 自身の訳

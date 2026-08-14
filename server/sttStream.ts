@@ -12,8 +12,14 @@ import { recordSocketError } from "./errorLog";
 // Google streaming recognition has a per-stream time limit. Reopen the stream
 // before then so long (2 min+) speech continues seamlessly.
 const STREAM_RESTART_MS = 4.5 * 60 * 1000;
-// V2 model adaptation caps the phrase boost at 20 (higher → INVALID_ARGUMENT).
-const BOOST = 20;
+/**
+ * 用語集の語を「出やすくする」後押しの強さ。V2 の上限は 20（超えると INVALID_ARGUMENT）。
+ *
+ * ★強くするほど登録語は拾いやすくなるが、**似た音の別の登録語に引き寄せられる**副作用も
+ * 強まる（2026-08-14 の基本性能テストで「狸穴町」→「馬喰横山」が実際に発生）。
+ * 値の見直しができるよう環境変数で変えられるようにしてある。
+ */
+const BOOST = Number(process.env.STT_ADAPTATION_BOOST ?? "20");
 // 幻聴対策の第3層: モデル自身の「自信度」が低い確定は破棄する。
 // 無音ゲート（音量）では、ささやき・息・衣擦れのような「続く音」を本物の小声と
 // 区別できない（小声を守るため通すしかない）。その先の見分けは内容側で行う。
