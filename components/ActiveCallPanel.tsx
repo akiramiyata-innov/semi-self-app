@@ -114,9 +114,13 @@ export function ActiveCallPanel({
 
   return (
     <div
+      /* お客様が話している間は枠も色を変える。2件同時対応で画面が小さいときや、
+         視線が別のところにあるときでも、目の端で気づけるようにするため。 */
       className={`flex flex-col h-full bg-white rounded-xl border-2 shadow overflow-hidden transition-all ${
         isListening
           ? "border-red-500 ring-4 ring-red-300/60 shadow-lg shadow-red-200"
+          : userSpeaking
+          ? "border-amber-400 ring-4 ring-amber-300/60 shadow-lg shadow-amber-200"
           : isCapturing
           ? "border-purple-400 shadow-purple-100"
           : "border-gray-200"
@@ -252,18 +256,6 @@ export function ActiveCallPanel({
         </div>
       </div>
 
-      {/* お客様が話している間の案内。確定テキストが出るまで点灯し続ける（息継ぎでは消えない）。
-          点灯はお客様のマイクのON/OFFではなく、実際の声の大きさで判定している。 */}
-      {userSpeaking && (
-        <div className="bg-amber-50 border-b border-amber-200 px-3 py-1.5 flex items-center gap-2 shrink-0">
-          <span className="relative flex h-2.5 w-2.5 shrink-0">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-70" />
-            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
-          </span>
-          <span className="text-amber-800 text-xs font-semibold">お客様発話中</span>
-        </div>
-      )}
-
       {/* お客様側のマイク異常。トーストは4秒で消えるので、続いている間は帯で出し続ける。 */}
       {userMicError && (
         <div className="bg-orange-50 border-b border-orange-300 px-3 py-1.5 flex items-center gap-2 shrink-0">
@@ -319,6 +311,41 @@ export function ActiveCallPanel({
               </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {/*
+        お客様が話している間の案内。**画面のいちばん下**（入力欄の真上）に出す。
+        会話が伸びると係員の目線は下（最新の発言と入力欄）に移るため、画面の上に置くと
+        視界から外れ、かぶせて話す原因になっていた（2026-08-15 ユーザー指摘）。
+        確定テキストが出るまで点灯し続ける（息継ぎでは消えない）。点灯はお客様のマイクの
+        ON/OFFではなく、実際の声の大きさで判定している。
+        係員自身のマイクもONのときは「声が重なっている」状態なので、赤で強く知らせる。
+      */}
+      {userSpeaking && (
+        <div
+          className={`flex items-center justify-center gap-2.5 px-4 py-2.5 shrink-0 ${
+            isListening ? "bg-red-600 text-white" : "bg-amber-400 text-amber-950"
+          }`}
+        >
+          <span className="relative flex h-3 w-3 shrink-0">
+            <span
+              className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                isListening ? "bg-red-200" : "bg-amber-700"
+              }`}
+            />
+            <span
+              className={`relative inline-flex rounded-full h-3 w-3 ${
+                isListening ? "bg-white" : "bg-amber-800"
+              }`}
+            />
+          </span>
+          <Mic size={18} className="shrink-0" />
+          <span className="font-bold text-sm sm:text-base tracking-wide">
+            {isListening
+              ? "お客様が話しています　声が重なっています"
+              : "お客様が話しています　お待ちください"}
+          </span>
         </div>
       )}
 
