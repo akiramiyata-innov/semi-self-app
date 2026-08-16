@@ -954,8 +954,16 @@ export default function StaffPage() {
    * スピーカーから出たお客様の声を係員のマイクが拾うと、それが認識・翻訳されて
    * お客様へ返ってしまう。マイクを切れば即座に元どおり聞こえる（0.25秒ほど
    * 貯め直すだけ）。イヤホンを使う運用でも、この止め方が邪魔になることはない。
+   *
+   * `listening`（実際に聞き取りが始まった）だけでなく `activeListeningId`（押した直後）も
+   * 見るのは、**押してから聞き取りが始まるまでの間に音を出さない**ため。
+   *
+   * ★ただしマイクが起動に失敗した場合（許可されていない・機器が無い等）は数に入れない。
+   * `activeListeningId` は失敗しても立ったままになるので、これを外さないと
+   * 「マイクは動いていないのにお客様音声だけ止まったまま」になり、次にマイクボタンを
+   * 押し直すまで戻らない（2026-08-17 の検証で実際に発生）。
    */
-  const staffMicOn = listening || activeListeningId !== null;
+  const staffMicOn = listening || (activeListeningId !== null && !micError);
   useEffect(() => {
     audioPlayersRef.current.forEach((player) => player.setMuted(staffMicOn));
   }, [staffMicOn]);
