@@ -278,7 +278,7 @@ export function ActiveCallPanel({
             title={userMicState === "off" ? "お客様のマイクをONにする" : "お客様のマイクをOFFにする"}
           >
             {userMicState === "off" ? <MicOff size={14} /> : <Mic size={14} />}
-            {userMicState === "on" ? "お客様マイク稼働中" : userMicState === "paused" ? "お客様マイク停止中" : "お客様マイクOFF"}
+            {userMicState === "on" ? "お客様マイクON" : userMicState === "paused" ? "お客様マイク停止中" : "お客様マイクOFF"}
           </button>
           {/* お客様の生の声をこの画面で聞く（v1.42.0・既定はOFF）。
               係員自身のマイクが入っている間は回り込み防止のため自動で止まる（琥珀色）。 */}

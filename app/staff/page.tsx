@@ -414,6 +414,7 @@ export default function StaffPage() {
       socketRef.current?.emit("speech:staff", { sessionId: sid, text, isFinal: true, clientId: entryId });
       // ここから先の「準備しています」はサーバーが引き継ぐ（返答が届いた時点でキオスクが消す）。
       // 手元の記録だけ白紙に戻し、次の発話でまた案内を出せるようにする（通知は送らない）。
+      // 消すときの宛先（lastComposingSidRef）はここでは消さない。
       composingSidRef.current = null;
 
       // 非ストリーミング（Chrome/Edge）は従来通りターン制: 送信後マイクOFF、再度押して話す。
@@ -877,13 +878,32 @@ export default function StaffPage() {
   // お客様は話し終えた後、係員が回答を用意している間ずっと無反応の画面を見ることになり
   // 「伝わったのか」不安になる。マイクON中／入力中であることをキオスクに知らせる。
   const composingSidRef = useRef<string | null>(null); // 現在「準備中」を通知している通話
+  /**
+   * 直近で「準備中」を出した通話。**消すときの宛先**として使う。
+   *
+   * ★`composingSidRef` は発話の確定時に「手元の記録だけ」白紙に戻している（以降は
+   * サーバーが引き継ぐため）。ところがサーバーは係員の声を検知するたびに出し直すので、
+   * 手元の記録を信じると「もう消えているはず」と判断して**消す通知を送れない**。
+   * 実際に「マイクをOFFにしてもお客様画面の『回答を準備しています』が消えない」が
+   * 起きた（2026-08-17 ユーザー報告）。宛先だけは別に覚えておく。
+   */
+  const lastComposingSidRef = useRef<string | null>(null);
   const typingSidRef = useRef<string | null>(null);    // 入力欄に文字がある通話
   const setComposing = useCallback((sessionId: string | null) => {
     const prev = composingSidRef.current;
+    if (sessionId === null) {
+      // 消すときは、手元の記録に関わらず必ず送る（上記の理由）。
+      const target = prev ?? lastComposingSidRef.current;
+      if (target) socketRef.current?.emit("staff:composing", { sessionId: target, active: false });
+      composingSidRef.current = null;
+      lastComposingSidRef.current = null;
+      return;
+    }
     if (prev === sessionId) return; // 同じ状態の連投を避ける
     if (prev) socketRef.current?.emit("staff:composing", { sessionId: prev, active: false });
-    if (sessionId) socketRef.current?.emit("staff:composing", { sessionId, active: true });
+    socketRef.current?.emit("staff:composing", { sessionId, active: true });
     composingSidRef.current = sessionId;
+    lastComposingSidRef.current = sessionId;
   }, []);
   // マイクONで通知する。OFFでは解除しない：切った後も確定テキスト待ち→翻訳→音声合成が
   // 続き、その間にお客様の画面が無反応になるため。解除はフックの onStop（確定待ちが明けた
@@ -1599,7 +1619,7 @@ export default function StaffPage() {
                       return next;
                     });
                     socketRef.current?.emit("speech:staff", { sessionId: session.sessionId, text, isFinal: true, clientId: entryId });
-                    composingSidRef.current = null; // 以降はサーバーが案内を引き継ぐ
+                    composingSidRef.current = null; // 以降はサーバーが案内を引き継ぐ（宛先は残す）
                     // Auto-OFF mic after sending — staff must press mic button again to speak
                     stopMic();
                     activeListeningSession.current = null;

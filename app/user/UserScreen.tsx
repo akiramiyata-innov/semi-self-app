@@ -208,6 +208,16 @@ const MIC_ERR: Record<string, Record<MicErrorCode, string>> = {
 
 /** 係員から解除通知が届かない場合でも「準備しています」が残り続けないようにする保険。 */
 const COMPOSING_MAX_MS = 60_000;
+/**
+ * 係員の声が途切れてから「回答を準備しています」を消すまでの時間。
+ *
+ * ★係員のマイクは会話中つけっぱなしにできる。サーバーは**声を検知するたび**に
+ * この案内を送ってくるので、話している間は点きっぱなしになり、話をやめれば
+ * ここで消える。これが無いと、係員が答え終えたあともマイクをONにしている限り
+ * 「準備しています」が出続け、お客様が話し出せない（2026-08-17 ユーザー報告）。
+ * 合成中（synthesizing）は返事が届くまで消さないので、上の保険のほうを使う。
+ */
+const COMPOSING_IDLE_MS = 6_000;
 /** アバターが話し終えてから発話検知を再開するまでの余韻（スピーカーの残響・反響対策）。 */
 const AVATAR_TAIL_MS = 500;
 /**
@@ -311,6 +321,10 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   const [showConnectWarning, setShowConnectWarning] = useState(false);
   const [deliveredIds, setDeliveredIds] = useState<string[]>([]); // 係員に届いた発言のid
   const [staffComposing, setStaffComposing] = useState(false);    // 係員が回答を準備中
+  /** 「準備しています」の合図を受けるたびに増やす（自動で消えるまでを数え直すため）。 */
+  const [composingSignal, setComposingSignal] = useState(0);
+  /** いまの「準備しています」が合成中（返事が確実に来る）によるものか。 */
+  const composingSynthesizingRef = useRef(false);
   const connectWarningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const sessionIdRef = useRef<string | null>(null);
@@ -780,6 +794,11 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       // **この合図は読み上げ本体より先に届く**ので、通話終了が先に来ても
       // 「返事がまだ来ていない」ことが分かる（係員のマイクONだけでは立てない）。
       if (payload.active && payload.synthesizing) speechPendingRef.current = true;
+      if (payload.active) {
+        composingSynthesizingRef.current = !!payload.synthesizing;
+        // 声を検知するたびに届く合図。受けるたびに自動で消えるまでの時間を数え直す。
+        setComposingSignal((n) => n + 1);
+      }
     });
 
     // テキスト表示の切り替え。お客様側・係員側のどちらが押しても、サーバーが決めた
@@ -790,6 +809,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
 
     s.on("speech:staff", (payload: { text: string; isFinal: boolean; forceShowText?: boolean }) => {
       setStaffComposing(false); // 返事が来た（途中表示でも）＝準備中の表示は不要
+      composingSynthesizingRef.current = false;
       if (payload.isFinal) {
         setInterimStaff("");
         const entryId = addEntry({ speaker: "staff", text: payload.text, isFinal: true });
@@ -888,12 +908,15 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     socketRef.current?.emit("user:micState", { sessionId: sid, state });
   }, [listening, micMuted, sessionId]);
 
-  // 解除通知が届かなかった場合の保険（係員が入力途中で離席した等）。
+  // 一定時間 合図が来なければ自動で消す。合図を受けるたびに数え直すので、係員が
+  // 話している間は点きっぱなしになり、話をやめれば消える。合成中（返事が確実に来る）
+  // のときだけは長めに待つ（解除通知が届かなかった場合の保険）。
   useEffect(() => {
     if (!staffComposing) return;
-    const t = setTimeout(() => setStaffComposing(false), COMPOSING_MAX_MS);
+    const ms = composingSynthesizingRef.current ? COMPOSING_MAX_MS : COMPOSING_IDLE_MS;
+    const t = setTimeout(() => setStaffComposing(false), ms);
     return () => clearTimeout(t);
-  }, [staffComposing]);
+  }, [staffComposing, composingSignal]);
 
   const selectLang = (code: LangCode) => {
     unlockAudioContext(); // running inside a tap → unlock audio for the staff's TTS
