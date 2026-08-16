@@ -58,6 +58,15 @@ export interface SpeechStaffPayload {
   translatedText?: string; // User's language translation, server-added
 }
 
+/**
+ * お客様の生の声を担当係員へ中継するときのかたまり（v1.42.0）。
+ * 中身は音声認識に送っているものと同じ 16kHz・16bit モノラルの 0.1 秒ぶん。
+ */
+export interface UserAudioPayload {
+  sessionId: string;
+  chunk: ArrayBuffer;
+}
+
 // TTS audio from server to user
 export interface TtsAudioPayload {
   sessionId: string;
@@ -86,6 +95,7 @@ export interface ServerToStaffEvents {
   "call:taken": (payload: CallTakenPayload) => void;
   "call:ended": (payload: CallEndPayload) => void;
   "speech:user": (payload: SpeechUserPayload) => void;
+  "user:audio": (payload: UserAudioPayload) => void;
   "screen:frame": (payload: ScreenFramePayload) => void;
 }
 

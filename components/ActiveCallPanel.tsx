@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Monitor, MonitorOff, Mic, MicOff, PhoneOff, Send, MessageSquareText, MessageSquareOff, VideoOff } from "lucide-react";
+import { Monitor, MonitorOff, Mic, MicOff, PhoneOff, Send, MessageSquareText, MessageSquareOff, VideoOff, Volume2, VolumeX } from "lucide-react";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { ScreenShareView } from "./ScreenShareView";
 import { Flag } from "./Flag";
@@ -62,6 +62,18 @@ interface ActiveCallPanelProps {
   userMicState?: "on" | "paused" | "off";
   /** お客様マイクを係員側から入/切する。お客様側の操作と対等（後勝ち）。 */
   onSetUserMic?: (on: boolean) => void;
+  /**
+   * お客様の生の声をこの画面で鳴らしているか（v1.42.0・既定はOFF）。
+   * 文字起こしの取り逃し・遅れ・書き間違いを耳で補うための機能。
+   */
+  listenUserAudio?: boolean;
+  /**
+   * 「お客様の声」はONだが、係員自身のマイクが入っているため今は鳴らしていない状態。
+   * スピーカーの声を自分のマイクが拾う「回り込み」を防ぐための自動停止。
+   */
+  listenPaused?: boolean;
+  /** 「お客様の声」を入/切する。 */
+  onToggleListenUser?: () => void;
 }
 
 export function ActiveCallPanel({
@@ -90,6 +102,9 @@ export function ActiveCallPanel({
   userMicError,
   userMicState = "off",
   onSetUserMic,
+  listenUserAudio = false,
+  listenPaused = false,
+  onToggleListenUser,
 }: ActiveCallPanelProps) {
   const [inputText, setInputText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -205,10 +220,12 @@ export function ActiveCallPanel({
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        {/* ★2件同時のように幅が狭いときは、ボタンを縮めずに次の行へ折り返す。
+            縮めると「画面共/有」「終/了」のように語の途中で改行され、とっさに読めない。 */}
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <button
             onClick={onToggleMic}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               isListening
                 ? "bg-red-500 text-white hover:bg-red-600 ring-2 ring-red-300"
                 : "bg-gray-200 text-gray-600 hover:bg-gray-300"
@@ -225,7 +242,7 @@ export function ActiveCallPanel({
           </button>
           <button
             onClick={onToggleScreenShare}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               isCapturing
                 ? "bg-purple-500 text-white hover:bg-purple-600"
                 : "bg-gray-200 text-gray-600 hover:bg-gray-300"
@@ -237,7 +254,7 @@ export function ActiveCallPanel({
           </button>
           <button
             onClick={onToggleText}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               textVisible
                 ? "bg-sky-600 text-white hover:bg-sky-700"
                 : "bg-gray-200 text-gray-600 hover:bg-gray-300"
@@ -251,7 +268,7 @@ export function ActiveCallPanel({
               ボタンとしては「ONの仲間」（押せばOFFにできる）として扱う。 */}
           <button
             onClick={() => onSetUserMic?.(userMicState === "off")}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               userMicState === "on"
                 ? "bg-pink-600 text-white hover:bg-pink-700"
                 : userMicState === "paused"
@@ -263,9 +280,31 @@ export function ActiveCallPanel({
             {userMicState === "off" ? <MicOff size={14} /> : <Mic size={14} />}
             {userMicState === "on" ? "お客様マイク稼働中" : userMicState === "paused" ? "お客様マイク停止中" : "お客様マイクOFF"}
           </button>
+          {/* お客様の生の声をこの画面で聞く（v1.42.0・既定はOFF）。
+              係員自身のマイクが入っている間は回り込み防止のため自動で止まる（琥珀色）。 */}
+          <button
+            onClick={onToggleListenUser}
+            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              listenUserAudio && listenPaused
+                ? "bg-amber-500 text-white hover:bg-amber-600"
+                : listenUserAudio
+                  ? "bg-teal-600 text-white hover:bg-teal-700"
+                  : "bg-gray-200 text-gray-600 hover:bg-gray-300"
+            }`}
+            title={
+              listenUserAudio && listenPaused
+                ? "自分のマイクが入っている間は、声の回り込みを防ぐため鳴らしません（マイクを切れば戻ります）"
+                : listenUserAudio
+                  ? "お客様の声を鳴らすのをやめる"
+                  : "お客様の声をこの画面のスピーカーで聞く"
+            }
+          >
+            {listenUserAudio && !listenPaused ? <Volume2 size={14} /> : <VolumeX size={14} />}
+            {listenUserAudio && listenPaused ? "お客様の声 停止中" : listenUserAudio ? "お客様の声 ON" : "お客様の声 OFF"}
+          </button>
           <button
             onClick={onEnd}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600 transition-colors"
+            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600 transition-colors"
             title="対話終了"
           >
             <PhoneOff size={14} />

@@ -100,6 +100,13 @@ interface ActiveSession extends CallRecord {
    * どちらからでも切り替えられ、**後から操作したほうが必ず勝つ**。
    */
   textVisible: boolean;
+  /**
+   * 係員が「お客様の声」を聞いているか（v1.42.0）。**既定はOFF**。
+   *
+   * ONの間だけ、お客様の音声を担当係員の画面へ中継する。常時流さないのは、
+   * 事務室に絶えず声が流れることになるためと、聞かない通話の通信量を使わないため。
+   */
+  listenUserAudio?: boolean;
   /** 券面カメラの映像が最後に届いた時刻。映像の途絶検知（C-1）に使う。 */
   lastFaceFrameAt?: number;
   /** 今回の途絶をすでに障害履歴へ記録したか（1回の途絶で1件だけ記録する）。 */
@@ -335,6 +342,28 @@ function noteUserInterim(socketId: string, transcript: string): void {
     session.speakingConfirmed = true;
     setUserSpeaking(sessionId, session, true);
     armSpeakingTimer(sessionId, session);
+    return;
+  }
+}
+
+/**
+ * お客様の音声を担当係員の画面へ中継する（v1.42.0「お客様の声を聞く」）。
+ *
+ * これまでお客様の音声は、文字にしたら捨てていた。文字起こしには
+ * ①モデルが文の途中で打ち切る取り逃し ②確定までの数秒の遅れ ③同音の書き間違い
+ * という弱点があり、いずれも「耳で聞いていれば分かる」ものだった。認識の流れは
+ * そのままに、同じ音のコピーを係員にも届けて補いにする。
+ *
+ * 送るのは「その通話の係員が聞くと決めているとき」だけ。アバターが読み上げて
+ * いる間は送らない（キオスクは自分の声を拾わないよう無音を送っており、中継しても
+ * 無音しか流れない）。
+ */
+function relayUserAudio(socketId: string, chunk: Buffer): void {
+  for (const [sessionId, session] of activeSessions) {
+    if (session.userSocketId !== socketId) continue;
+    if (!session.listenUserAudio) return;
+    if (session.avatarSpeaking) return;
+    io.to(session.staffSocketId).emit("user:audio", { sessionId, chunk });
     return;
   }
 }
@@ -843,6 +872,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       () => noteVoiceActivity(socket.id),
       // お客様側の途中経過を係員画面へ（係員側のソケットでは該当セッションが無く何もしない）
       (transcript) => noteUserInterim(socket.id, transcript),
+      // お客様の生の声を担当係員へ（「お客様の声」がONの通話だけ）
+      (chunk) => relayUserAudio(socket.id, chunk),
     );
 
     // ── Staff joins ───────────────────────────────────────────────────────────
@@ -1235,6 +1266,19 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       // 担当外の係員や古い画面からの操作を通さない（speech:staff と同じ守り）
       if (session.staffSocketId !== socket.id) return;
       io.to(session.userSocketId).emit("user:micControl", { on: !!on });
+    });
+
+    // ── 係員が「お客様の声」を聞く／やめる（担当係員のみ）──────────────────────
+    // 既定はOFF。ONの間だけ relayUserAudio がお客様の音声をこの係員へ配る。
+    // 最終的な状態はサーバーが持ち、確認の返事を送って係員画面の表示を合わせる
+    // （押した直後にONに見えて実際は届いていない、という食い違いを作らないため）。
+    socket.on("staff:listenUser", (payload: { sessionId: string; on: boolean }) => {
+      const { sessionId, on } = payload;
+      const session = activeSessions.get(sessionId);
+      if (!session) return;
+      if (session.staffSocketId !== socket.id) return;
+      session.listenUserAudio = !!on;
+      io.to(session.staffSocketId).emit("user:audioState", { sessionId, on: !!on });
     });
 
     // ── 係員が回答を準備中（マイクON／入力中）→ お客様に知らせる ────────────────

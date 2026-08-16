@@ -243,6 +243,14 @@ export function registerSttHandlers(
    * 「実際に声がある」証拠なので、これを合図に係員画面へ流す。
    */
   onInterim?: (transcript: string) => void,
+  /**
+   * お客様から届いた音声のかたまりをそのまま渡す（v1.42.0「お客様の声を聞く」）。
+   *
+   * 係員が担当の通話で「お客様の声」をONにしているときだけ、担当係員の画面へ
+   * 中継して鳴らす。**認識の流れには手を触れず、横からコピーを渡すだけ**なので、
+   * ここで何が起きても文字起こしは従来どおり動く（呼び出しは try で囲ってある）。
+   */
+  onAudio?: (chunk: Buffer) => void,
 ): void {
   let stream: SpeechStream | null = null;
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
@@ -553,6 +561,12 @@ export function registerSttHandlers(
       noteSttSpeech(socket.id);
     } else {
       voiceRun = 0;
+    }
+    // 係員が「お客様の声」をONにしていれば、同じ音を担当係員の画面へも配る。
+    // ★認識に関わる処理を全部終えた最後に呼ぶ。ここで万一つまずいても、
+    //   音声認識・無音ゲート・発話中表示には影響が出ない位置にしてある。
+    if (onAudio) {
+      try { onAudio(buf); } catch { /* 中継の失敗で認識を巻き添えにしない */ }
     }
   });
 

@@ -12,6 +12,8 @@ import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import type { MicErrorCode } from "@/hooks/useSpeechRecognition";
 import { useScreenCapture } from "@/hooks/useScreenCapture";
 import { installClientErrorReporter } from "@/lib/clientErrorReporter";
+import { getSharedAudioContext } from "@/lib/audioUnlock";
+import { UserAudioPlayer } from "@/lib/userAudioPlayer";
 import { APP_VERSION } from "@/lib/appVersion";
 import type { TranscriptEntry } from "@/lib/types";
 import type { LangCode, StaffStatus, StaffInfo } from "@/lib/socketEvents";
@@ -68,6 +70,8 @@ interface ActiveSession {
   userMicError: MicErrorCode | null;
   /** お客様マイクの今の状態。on=聞き取り中／paused=読み上げ中の自動一時停止／off=OFF。 */
   userMicState: "on" | "paused" | "off";
+  /** お客様の生の声をこの画面で鳴らしているか（v1.42.0・既定はOFF）。 */
+  listenUserAudio: boolean;
 }
 
 // Kiosk machines available for demo
@@ -339,6 +343,32 @@ export default function StaffPage() {
     });
   }, []);
 
+  // ── お客様の声を聞く（v1.42.0）─────────────────────────────────────────────
+  // お客様の音声は音声認識のためにサーバーへ届いており、これまでは文字にしたら
+  // 捨てていた。同じ音を担当係員にも配って耳で聞けるようにする。文字起こしの
+  // 弱点（取り逃し・数秒の遅れ・同音の書き間違い）を、そのまま補うのが狙い。
+  /** 通話ごとの再生装置。ONにした通話の分だけ作り、終わったら片付ける。 */
+  const audioPlayersRef = useRef<Map<string, UserAudioPlayer>>(new Map());
+  const ensureAudioPlayer = useCallback((sessionId: string) => {
+    let player = audioPlayersRef.current.get(sessionId);
+    if (!player) {
+      player = new UserAudioPlayer();
+      // 係員自身のマイクが入っている最中にONにされた場合は、最初から鳴らさない
+      player.setMuted(micOnRef.current);
+      audioPlayersRef.current.set(sessionId, player);
+    }
+    return player;
+  }, []);
+  const disposeAudioPlayer = useCallback((sessionId: string) => {
+    audioPlayersRef.current.get(sessionId)?.dispose();
+    audioPlayersRef.current.delete(sessionId);
+  }, []);
+  /** 画面を離れるときや再接続のときに、鳴っているものを全部止める。 */
+  const disposeAllAudioPlayers = useCallback(() => {
+    audioPlayersRef.current.forEach((player) => player.dispose());
+    audioPlayersRef.current.clear();
+  }, []);
+
   // ── Speech Recognition ───────────────────────────────────────────────────
   const { start: startMic, stop: stopMic, listening, error: micError, errorDetail: micErrorDetail, manualStop } = useSpeechRecognition({
     lang: "ja-JP",
@@ -457,6 +487,9 @@ export default function StaffPage() {
        */
       if (hadConnectedRef.current) {
         const hadPanels = activeSessionsRef.current.size > 0;
+        // 鳴っているお客様の声も止める。パネルと同じで、繋ぎ直した後のこれらは
+        // すべて古い通話のもの（サーバー側では既に終了扱い）。
+        disposeAllAudioPlayers();
         setActiveSessions(new Map());
         setCallQueue([]);
         setPreviewFaceFrames(new Map());
@@ -489,6 +522,7 @@ export default function StaffPage() {
       // keeps a live ghost panel for a call another staff owns (their mic/text
       // would reach the customer). Mirror the call:ended cleanup.
       const { sessionId } = payload;
+      disposeAudioPlayer(sessionId);
       setActiveSessions((prev) => {
         if (!prev.has(sessionId)) return prev;
         const next = new Map(prev);
@@ -592,6 +626,7 @@ export default function StaffPage() {
 
     s.on("call:ended", (payload: { sessionId: string }) => {
       const { sessionId } = payload;
+      disposeAudioPlayer(sessionId);
       setActiveSessions((prev) => {
         const next = new Map(prev);
         next.delete(sessionId);
@@ -650,6 +685,18 @@ export default function StaffPage() {
     // お客様マイクの状態（稼働中/一時停止/OFF）。通話パネルの表示と入/切ボタンに使う。
     s.on("user:micState", (payload: { sessionId: string; state: "on" | "paused" | "off" }) => {
       updateSession(payload.sessionId, { userMicState: payload.state });
+    });
+
+    // お客様の生の声。「お客様の声」をONにした通話の分だけ届く（既定はOFF）。
+    s.on("user:audio", (payload: { sessionId: string; chunk: ArrayBuffer }) => {
+      audioPlayersRef.current.get(payload.sessionId)?.push(payload.chunk);
+    });
+
+    // 「お客様の声」の入/切をサーバーが確定した合図。押した見た目と実際に届いて
+    // いるかを食い違わせないよう、表示はこの返事に合わせる。
+    s.on("user:audioState", (payload: { sessionId: string; on: boolean }) => {
+      updateSession(payload.sessionId, { listenUserAudio: payload.on });
+      if (!payload.on) disposeAudioPlayer(payload.sessionId);
     });
 
     // 自分（係員）の発話の訳文が返ってきたら、先に表示した吹き出しに書き足す。
@@ -766,6 +813,7 @@ export default function StaffPage() {
       userMicError: null,
       // 応答直後にキオスクが自動ONにして最新状態を送ってくるまでの仮の値
       userMicState: "off",
+      listenUserAudio: false, // 既定はOFF。サーバー側の初期値と合わせる
     }]]));
   }, [previewFaceFrames]);
 
@@ -777,6 +825,7 @@ export default function StaffPage() {
 
   const endSession = useCallback((sessionId: string) => {
     socketRef.current?.emit("call:end", { sessionId });
+    disposeAudioPlayer(sessionId);
     setActiveSessions((prev) => {
       const next = new Map(prev);
       next.delete(sessionId);
@@ -792,7 +841,7 @@ export default function StaffPage() {
       stopCapture();
       captureSessionRef.current = null;
     }
-  }, [stopMic, stopCapture]);
+  }, [stopMic, stopCapture, disposeAudioPlayer]);
 
   const toggleMic = useCallback((sessionId: string) => {
     // ★ON/OFFの判定は「今マイクが入っているか」(micOnRef)で行う。
@@ -853,6 +902,66 @@ export default function StaffPage() {
     socketRef.current?.emit("session:setTextVisible", { sessionId, visible });
     updateSession(sessionId, { textVisible: visible }); // 押した手応えのため先に反映
   }, [activeSessions, updateSession]);
+
+  /**
+   * 「お客様の声」を聞く／やめる（v1.42.0）。
+   *
+   * ★ONにするときは、このクリックの中で音の出口（AudioContext）を起こす必要がある。
+   *   ブラウザは画面を触るまで音を鳴らさないため。しかも `resume()` は例外を投げずに
+   *   止まったまま返ることがある（v1.34.1 でお客様側に同じ穴があった）。起きたことを
+   *   確かめて、鳴らせないときは係員に理由を知らせてONを取り消す。
+   */
+  const toggleListenUser = useCallback((sessionId: string) => {
+    const session = activeSessions.get(sessionId);
+    if (!session) return;
+    const turnOff = () => {
+      socketRef.current?.emit("staff:listenUser", { sessionId, on: false });
+      disposeAudioPlayer(sessionId);
+      updateSession(sessionId, { listenUserAudio: false });
+    };
+    if (session.listenUserAudio) { turnOff(); return; }
+
+    const ctx = getSharedAudioContext();
+    if (!ctx) {
+      addToast("このブラウザでは音声を再生できません。文字起こしでご確認ください。", "error");
+      return;
+    }
+    const player = ensureAudioPlayer(sessionId);
+    socketRef.current?.emit("staff:listenUser", { sessionId, on: true });
+    updateSession(sessionId, { listenUserAudio: true }); // 押した手応えのため先に反映
+    const cannotPlay = () => {
+      addToast(
+        "この画面で音を鳴らせませんでした。タブがミュートになっていないか、音声の出力先と音量をご確認ください。",
+        "error",
+      );
+      turnOff();
+    };
+    void ctx.resume().catch(() => { /* 下の確認で拾う */ }).then(() => {
+      if (ctx.state !== "running") { cannotPlay(); return; }
+      // ★押した直後は running と報告されても音が出ないことがある（検証で実際に遭遇）。
+      //   少し待って「届いているのに1つも鳴らせていない」なら、結果を見て知らせる。
+      setTimeout(() => {
+        // すでにやめている／通話が終わっている場合は何もしない（余計な警告を出さない）
+        if (audioPlayersRef.current.get(sessionId) !== player) return;
+        if (player.blocked) cannotPlay();
+      }, 3000);
+    });
+  }, [activeSessions, updateSession, addToast, ensureAudioPlayer, disposeAudioPlayer]);
+
+  /**
+   * ★声の回り込み防止：係員自身のマイクが入っている間はお客様の声を鳴らさない。
+   *
+   * スピーカーから出たお客様の声を係員のマイクが拾うと、それが認識・翻訳されて
+   * お客様へ返ってしまう。マイクを切れば即座に元どおり聞こえる（0.25秒ほど
+   * 貯め直すだけ）。イヤホンを使う運用でも、この止め方が邪魔になることはない。
+   */
+  const staffMicOn = listening || activeListeningId !== null;
+  useEffect(() => {
+    audioPlayersRef.current.forEach((player) => player.setMuted(staffMicOn));
+  }, [staffMicOn]);
+
+  // 画面を離れるときに鳴っているものを止める（AudioContext に音源が残らないように）
+  useEffect(() => () => { disposeAllAudioPlayers(); }, [disposeAllAudioPlayers]);
 
   const justSentRef = useRef(false); // 直前の入力欄クリアが「送信」によるものか
   const handleTypingChange = useCallback((sessionId: string, typing: boolean) => {
@@ -1453,6 +1562,9 @@ export default function StaffPage() {
                   userMicError={session.userMicError ? USER_MIC_ERR_JA[session.userMicError] : null}
                   userMicState={session.userMicState}
                   onSetUserMic={(on) => socketRef.current?.emit("staff:setUserMic", { sessionId: session.sessionId, on })}
+                  listenUserAudio={session.listenUserAudio}
+                  listenPaused={staffMicOn}
+                  onToggleListenUser={() => toggleListenUser(session.sessionId)}
                   onToggleText={() => toggleTextVisible(session.sessionId)}
                   onToggleMic={() => toggleMic(session.sessionId)}
                   onToggleScreenShare={() => toggleScreenShare(session.sessionId)}
