@@ -923,12 +923,18 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         saveSessionLog(old).catch((e) => console.error("[log] 幽霊通話の保存に失敗:", e));
         console.log(`[call] 同じ端末からの再呼び出しにより前の通話を終了: ${old.machineName} (${oldId})`);
       });
-      // 応答前の古い呼び出しも同様（鳴りっぱなしの着信カードを取り下げる）
+      // 応答前の古い呼び出しも同様（鳴りっぱなしの着信カードを取り下げる）。
+      //
+      // ★取り下げの合図は call:ended で送る（2026-08-16 日本語テストで発覚）。
+      // call:taken は「他の係員が応答した」の意味で、係員画面はカードを消さずに
+      // 灰色の「対応中」へ変えて残す（その通話の call:ended まで消えない設計）。
+      // 取り下げた呼び出しには call:ended が二度と来ないため、灰色のカードが
+      // 画面の再読み込みまで残り続けていた。以降の取り下げ系3経路＋拒否も同じ。
       callQueue.forEach((rec, oldId) => {
         if (rec.machineId !== payload.machineId) return;
         callQueue.delete(oldId);
         clearCallTimeout(oldId);
-        io.to("call-queue").emit("call:taken", { sessionId: oldId });
+        io.to("call-queue").emit("call:ended", { sessionId: oldId });
         console.log(`[call] 同じ端末からの再呼び出しにより古い呼び出しを取り下げ: ${rec.machineName} (${oldId})`);
       });
 
@@ -972,7 +978,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         if (!pending) return; // すでに応答済み等（保険。通常は解除済みでここに来ない）
         callQueue.delete(sessionId);
         io.to(pending.userSocketId).emit("call:timeout", { sessionId });
-        io.to("call-queue").emit("call:taken", { sessionId }); // 着信カードを消す
+        // 着信カードを消す（call:taken だと灰色の「対応中」で残ってしまう）
+        io.to("call-queue").emit("call:ended", { sessionId });
         io.to("call-queue").emit("call:missed", {
           sessionId,
           machineName: pending.machineName,
@@ -1043,7 +1050,9 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       callQueue.delete(sessionId);
       clearCallTimeout(sessionId);
       io.to(record.userSocketId).emit("call:rejected", { sessionId });
-      io.to("call-queue").emit("call:taken", { sessionId });
+      // 拒否は「取り下げ」なので全係員のカードを消す（call:taken だと他の係員の
+      // 画面に灰色の「対応中」が残り続ける）
+      io.to("call-queue").emit("call:ended", { sessionId });
     });
 
     // ── Call ends ─────────────────────────────────────────────────────────────
@@ -1070,6 +1079,44 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       }
       callQueue.delete(sessionId);
       clearCallTimeout(sessionId);
+      /**
+       * ★終了ボタン直前の発話の拾い上げ（2026-08-16 基本性能テスト 日本語S4）。
+       *
+       * 「ありがとうございました」と言った直後に終了を押すと、確定（話し終わりの約
+       * 1.5秒後）より先に通話が畳まれ、最後の言葉が係員にも通話記録にも残らなかった。
+       * お客様側の音声認識を半クローズし、言い終わっている分の確定を待つ（声が無ければ
+       * 即座に空が返る。上限3秒）。通話の一覧からは既に外した後なので（上の二重保存
+       * 防止）、待っている間にもう一方の参加者が終了を押しても二重処理にはならない。
+       *
+       * 拾えた確定は通常の発言と同じ形で係員へ表示し（call:ended はこの後に送るので
+       * パネルはまだ開いている）、通話記録にも追記する。キオスク側の画面にも通常どおり
+       * stt:final が届いて表示される。なお係員側の言い残しは対象外: 終了後に確定しても
+       * お客様に読み上げられることはなく、「お客様が聞いていない発言」が記録に残ると
+       * かえって紛らわしいため。
+       */
+      if (session) {
+        const userSocket = io.sockets.sockets.get(session.userSocketId);
+        const flush = userSocket?.data?.sttFlush as (() => Promise<string[]>) | undefined;
+        const flushed = flush ? await flush().catch(() => [] as string[]) : [];
+        for (const text of flushed) {
+          let translatedText: string | undefined;
+          if (session.userLang !== "ja") {
+            try {
+              translatedText = await translateWithGlossary(text, session.userLang, "ja");
+            } catch { /* 訳せなくても原文は記録に残す */ }
+          }
+          session.transcript.push({
+            id: `u-${Date.now()}-${entryCounter++}`,
+            speaker: "user",
+            text,
+            translatedText,
+            isFinal: true,
+            timestamp: Date.now(),
+          });
+          io.to(session.staffSocketId).emit("speech:user", { sessionId, text, lang: session.userLang, isFinal: true, translatedText });
+          console.log(`[call] 終了直前の発話を確定させて記録: ${JSON.stringify(text.slice(0, 40))} (${sessionId})`);
+        }
+      }
       io.to(`session:${sessionId}`).emit("call:ended", { sessionId });
       io.to("call-queue").emit("call:ended", { sessionId }); // Notify all staff to clear the call
       socket.leave(`session:${sessionId}`);
@@ -1466,7 +1513,10 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           });
           callQueue.delete(sessionId);
           clearCallTimeout(sessionId);
-          io.to("call-queue").emit("call:taken", { sessionId });
+          // 取り下げなのでカードを消す（call:taken だと灰色の「対応中」で残る。
+          // 2026-08-16 の幽霊カードの実例はこの経路: 応答前にお客様の接続が切れ、
+          // 灰色カードが再読み込みまで残った）
+          io.to("call-queue").emit("call:ended", { sessionId });
         }
       });
 

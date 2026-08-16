@@ -592,6 +592,14 @@ export default function StaffPage() {
         return next;
       });
       setCallQueue((prev) => prev.filter((c) => c.sessionId !== sessionId));
+      // 「対応中（灰色）」の印も片付ける。終わった通話の印を残すと画面を開いている間
+      // たまり続けるだけなので、カードと一緒に掃除する。
+      setTakenSessions((prev) => {
+        if (!prev.has(sessionId)) return prev;
+        const next = new Set(prev);
+        next.delete(sessionId);
+        return next;
+      });
       setPreviewFaceFrames((prev) => {
         if (!prev.has(sessionId)) return prev;
         const next = new Map(prev);

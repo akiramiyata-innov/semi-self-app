@@ -94,5 +94,17 @@
     "ja": "精算機",
     "yomi": "せいさんき",
     "en": "fare adjustment machine"
+  },
+  {
+    "id": "kounai-chizu-local",
+    "ja": "構内地図",
+    "yomi": "こうないちず",
+    "en": "station map",
+    "zh": "车站地图",
+    "zh-TW": "車站地圖",
+    "ko": "역 구내 지도",
+    "fr": "plan de la gare",
+    "es": "plano de la estación",
+    "th": "แผนที่สถานี"
   }
 ]

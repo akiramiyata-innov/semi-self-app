@@ -13,13 +13,23 @@ import { recordSocketError } from "./errorLog";
 // before then so long (2 min+) speech continues seamlessly.
 const STREAM_RESTART_MS = 4.5 * 60 * 1000;
 /**
- * 用語集の語を「出やすくする」後押しの強さ。V2 の上限は 20（超えると INVALID_ARGUMENT）。
+ * 用語集の語を「出やすくする」後押し（adaptation）の強さ。V2 の上限は 20。
+ * **0 = ヒントを送らない**（かな→漢字の後処理・読み照合は用語集から作られ、そのまま効く）。
  *
- * ★強くするほど登録語は拾いやすくなるが、**似た音の別の登録語に引き寄せられる**副作用も
- * 強まる（2026-08-14 の基本性能テストで「狸穴町」→「馬喰横山」が実際に発生）。
- * 値の見直しができるよう環境変数で変えられるようにしてある。
+ * ★既定を 20 → 0 に変更（2026-08-16 の実測にもとづく）。
+ * 基本性能テスト（日本語S5/S8）で「狸穴町→麻布十番」「舎人ライナー→狸ライナー」
+ * 「追加で→SUICAで」と、**登録語が別の言葉を乗っ取る誤認識**が多発。同一音声162本の
+ * 厳密A/B（後押し 20/5/0 × クリーン・実マイク相当の劣化音声 × 2声）で測った結果:
+ *   - 後押し 20 と 5 は結果が完全同一（強さの調整では副作用が消えない・2026-07-30と同結論）
+ *   - 劣化音声の正解率: 後押しあり 61% ／ **なし 78%**
+ *   - 乗っ取り: 後押しあり 8件（麻布十番×4・SUICA×4）／ なし 2件（SUICA×2
+ *     ＝「ついか」と「すいか」の聞き間違いで、後押しとは無関係に残る分）
+ *   - 実害の「狸穴町→麻布十番」「舎人ライナー→狸ライナー」「舎人→こねり」は
+ *     **後押しを切ると全て正しく認識**された（難読地名は後処理が漢字化を担う）
+ * つまり現状の16語では、モデルへのヒントは「助ける」より「乗っ取る」が上回る。
+ * 用語集そのものは後処理・読み照合・訳語固定で引き続き使われる。
  */
-const BOOST = Number(process.env.STT_ADAPTATION_BOOST ?? "20");
+const BOOST = Number(process.env.STT_ADAPTATION_BOOST ?? "0");
 // 幻聴対策の第3層: モデル自身の「自信度」が低い確定は破棄する。
 // 無音ゲート（音量）では、ささやき・息・衣擦れのような「続く音」を本物の小声と
 // 区別できない（小声を守るため通すしかない）。その先の見分けは内容側で行う。
@@ -63,6 +73,46 @@ const CLEAR_VOICE_RMS = Number(process.env.STT_CLEAR_VOICE_RMS ?? "1000");
 const CLEAR_VOICE_CHUNKS = Number(process.env.STT_CLEAR_VOICE_CHUNKS ?? "5");
 /** 「明らかに人の声」だったときの自信度しきい値。 */
 const MIN_CONFIDENCE_CLEAR = Number(process.env.STT_MIN_CONFIDENCE_CLEAR ?? "0.50");
+/**
+ * 分割確定の引き継ぎ分にも「明らかな声」の緩い基準を使ってよい最短の文字数
+ * （約物・空白を除いて数える）。
+ *
+ * ★経緯（2つの実害の板挟みを、文の長さで切り分ける）:
+ * - 2026-08-14 日本語S8: 引き継ぎ分に無条件で緩い基準を使うと、本物の発話の直後に
+ *   モデルが幻聴した**短い相づち（「はい」「うん」）**が「続き」として素通りした。
+ *   → v1.38.0 で引き継ぎ分は常に厳しい基準(0.80)へ。
+ * - 2026-08-16 日本語S5: その厳しさが本物を捨てた。「出口を出た後はどちらに
+ *   向かえばいいですか」が分割され、**後半「に向かえばいいですか」(10文字)が
+ *   自信度0.773で破棄**＝会話から欠落した（引き継いだ音量は maxRms=4766・36コマと
+ *   十分だったのに、引き継ぎというだけで 0.80 を課していた）。
+ *
+ * 幻聴の相づちは1〜4文字（はい・うん・はいはい）、本物の言い残しはそれより長い文が
+ * ほとんど。そこで「引き継ぎでも、この文字数以上なら音量の裏付けを認める」とする。
+ * 5文字未満の本物の続き（「はい」等）は厳しい基準のままだが、実測で本物の自信度は
+ * 0.814以上なので生き残る。
+ */
+const CONT_CLEAR_MIN_CHARS = Number(process.env.STT_CONT_CLEAR_MIN_CHARS ?? "5");
+
+/** 約物・空白を除いた「中身の文字数」。分割確定の長さ判定に使う。 */
+export function coreLength(text: string): number {
+  return text.replace(/[\s、。,.．・？?！!]/g, "").length;
+}
+
+/**
+ * 「明らかに人の声」として緩い自信度基準(0.50)を使ってよいか。
+ * 音量と長さの裏付け（maxRms≥1000・発話0.5秒以上）が前提。分割確定の引き継ぎ分は、
+ * その裏付けが**前の発話のもの**なので、文字数が十分な文（＝幻聴の相づちではない）に
+ * 限って認める。単体テストできるよう純関数として公開している。
+ */
+export function clearVoiceEligible(
+  verdict: { continuation?: boolean; maxRms: number; speechChunks: number },
+  coreLen: number,
+  minContChars = CONT_CLEAR_MIN_CHARS,
+): boolean {
+  if (verdict.maxRms < CLEAR_VOICE_RMS || verdict.speechChunks < CLEAR_VOICE_CHUNKS) return false;
+  if (!verdict.continuation) return true;
+  return coreLen >= minContChars;
+}
 
 type SpeechStream = ReturnType<v2.SpeechClient["_streamingRecognize"]>;
 
@@ -203,6 +253,8 @@ export function registerSttHandlers(
   let readingMap: ReadingEntry[] = [];
   let running = false;
   let consecutiveErrors = 0;
+  // 通話終了時の拾い上げ（flushPendingFinal）中だけ、確定テキストをここへも回収する
+  let flushCollector: ((transcript: string) => void) | null = null;
   // 無音ゲート：発話音量が観測されていない区間の認識結果（モデルの幻聴）を破棄する
   const gate = new SilenceGate();
   // 認識ガードの障害履歴への記録は種類ごとに1分に1件へ間引く。マイク常時ON方式では
@@ -271,7 +323,9 @@ export function registerSttHandlers(
     try { prev?.end(); } catch { /* already ended */ }
     // Adaptation phrases are the Japanese glossary terms, so only apply them to
     // Japanese recognition (they would not help — and could hurt — other langs).
-    const useAdaptation = phrases.length > 0 && lang.startsWith("ja");
+    // BOOST=0 は「ヒントを送らない」＝モデルへの後押しを完全に切る（かな→漢字の
+    // 後処理・読み照合は用語集から作られるので、そのまま効き続ける）。
+    const useAdaptation = phrases.length > 0 && lang.startsWith("ja") && BOOST > 0;
     const config = {
       explicitDecodingConfig: { encoding: "LINEAR16" as const, sampleRateHertz: 16000, audioChannelCount: 1 },
       languageCodes: [lang || "ja-JP"],
@@ -325,17 +379,17 @@ export function registerSttHandlers(
         const confidence = r.alternatives?.[0]?.confidence ?? null;
         // 音量と長さが「明らかに人の声」なら、自信度が低くても本物として通す。
         //
-        // ★ただし分割確定の引き継ぎ（continuation）には適用しない（2026-08-14 日本語S8）。
-        // 引き継ぎ分の音量・長さは**前の発話のもの**であり、この確定自身の裏付けではない。
-        // 緩い基準のまま通すと、本物の発話の直後にモデルが幻聴した短い相づち
-        // （「はい」「うん」）まで「続き」として素通りし、話していない言葉が表示された。
-        // 引き継ぎ分は常に厳しい基準（0.80）を課す。本物の続き（実際に話した言葉）は
-        // 自信度が高く出るので生き残る。効果は [stt-diag]/[stt-conf] の conf= で検証する。
-        const clearVoice = !verdict.continuation
-          && verdict.maxRms >= CLEAR_VOICE_RMS && verdict.speechChunks >= CLEAR_VOICE_CHUNKS;
+        // ★分割確定の引き継ぎ（continuation）は、引き継いだ音量が**前の発話のもの**なので、
+        // 文の長さ（CONT_CLEAR_MIN_CHARS）で本物の言い残しか幻聴の相づちかを見分ける。
+        // 無条件に緩めると幻聴の相づちが素通りし（2026-08-14 S8）、無条件に厳しくすると
+        // 本物の後半が欠落した（2026-08-16 S5・0.773で破棄）。経緯は CONT_CLEAR_MIN_CHARS
+        // の定義コメント参照。効果は [stt-diag]/[stt-conf] の conf= で検証する。
+        const volumeOk = verdict.maxRms >= CLEAR_VOICE_RMS && verdict.speechChunks >= CLEAR_VOICE_CHUNKS;
+        const clearVoice = clearVoiceEligible(verdict, coreLength(base));
         const minConfidence = clearVoice ? MIN_CONFIDENCE_CLEAR : MIN_CONFIDENCE;
         if (confidence != null && confidence > 0 && confidence < minConfidence) {
-          const why = `confidence=${confidence.toFixed(3)} 基準=${minConfidence}（${clearVoice ? "明らかな声" : "音量が微妙"} speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)}）`;
+          const label = clearVoice ? "明らかな声" : !volumeOk ? "音量が微妙" : "分割の続きの短文";
+          const why = `confidence=${confidence.toFixed(3)} 基準=${minConfidence}（${label} speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)}）`;
           console.log(`[stt-conf] 自信度が低いため破棄 ${why} raw=${JSON.stringify(raw)}`);
           recordGuard("stt-guard-conf", `自信度が低いため破棄（幻聴とみなした）: "${raw.slice(0, 60)}" ${why}`);
           onInterim?.("");  // 表示済みの途中経過を消す（確定は破棄したため）
@@ -349,6 +403,7 @@ export function registerSttHandlers(
         // 後処理側か）を切り分けるためのログ。confidence は自信度ガードの調整用に常時記録。
         console.log(`[stt-diag] speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)} conf=${confidence == null ? "-" : confidence.toFixed(3)} 基準=${minConfidence}${cont} raw=${JSON.stringify(raw)} corrected=${JSON.stringify(base)} final=${JSON.stringify(transcript)}`);
         socket.emit("stt:final", { transcript });
+        flushCollector?.(transcript); // 通話終了時の拾い上げ中なら、サーバー側でも回収する
         noteSttFinal(socket.id); // 性能測定：発話終了→確定テキスト
       } else {
         // interim（入力中プレビュー）も同じ基準で抑止し、幻聴の「打ちかけ表示」を防ぐ
@@ -407,6 +462,49 @@ export function registerSttHandlers(
     stream = null;
     try { s?.end(); } catch { /* already ended */ }
   }
+
+  /**
+   * 通話終了時に「言い終わっているが、まだ確定していない」発話を確定させる
+   * （2026-08-16 日本語S4: 「ありがとうございました」の直後に終了ボタンを押すと、
+   * 確定は話し終わりの約1.5秒後に来るため、間に合わず最後の言葉が消えていた）。
+   *
+   * 仕組み: ストリームを破棄せず**半クローズ（end）**すると、Google は手元に残っている
+   * 音声から確定を作って返してくる。その確定は通常どおりゲート（無音・羅列・暴走・
+   * 自信度）を通り、通ったものだけを回収して返す。呼び出し元（call:end）が係員への
+   * 表示と通話記録への追記を行う。
+   *
+   * 待つのは「最後の確定より後に声があった」ときだけ。声が無ければ即座に空で返るので、
+   * 通常の終了が遅くなることはない。上限は FLUSH_MAX_MS（既定3秒。マイクOFF時の
+   * クライアント側ドレイン3秒と同じ値）。
+   */
+  const FLUSH_MAX_MS = Number(process.env.STT_FLUSH_MAX_MS ?? "3000");
+  async function flushPendingFinal(): Promise<string[]> {
+    if (!running || !stream || !gate.hasSpeech()) return [];
+    const collected: string[] = [];
+    flushCollector = (t) => collected.push(t);
+    // stopStream 相当の後片付け。ただしストリームは破棄せず半クローズして結果を待つ。
+    running = false;
+    pendingAudio = [];
+    if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+    const s = stream;
+    stream = null;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, FLUSH_MAX_MS);
+      const settle = () => {
+        clearTimeout(timer);
+        // "end" はデータ配送の後に来るが、確定の処理（読み照合の await）が
+        // まだ走っていることがあるので、少しだけ待ってから締める。
+        setTimeout(resolve, 200);
+      };
+      s.on("end", settle);
+      s.on("error", settle);
+      try { s.end(); } catch { settle(); }
+    });
+    flushCollector = null;
+    return collected;
+  }
+  // 通話終了処理（socketServer の call:end）から呼べるように、ソケットに載せておく
+  socket.data.sttFlush = flushPendingFinal;
 
   socket.on("stt:start", async (payload?: { lang?: string }) => {
     lang = payload?.lang || "ja-JP";
