@@ -262,7 +262,7 @@ export function ActiveCallPanel({
             title={textVisible ? "お客様画面のテキスト表示をOFFにする" : "お客様画面にテキストを表示する"}
           >
             {textVisible ? <MessageSquareText size={14} /> : <MessageSquareOff size={14} />}
-            {textVisible ? "テキストON" : "テキストOFF"}
+            {textVisible ? "お客様画面テキストON" : "お客様画面テキストOFF"}
           </button>
           {/* お客様マイクの入/切。一時停止(paused)は読み上げ中の自動停止＝すぐ再開されるので、
               ボタンとしては「ONの仲間」（押せばOFFにできる）として扱う。 */}
@@ -295,12 +295,12 @@ export function ActiveCallPanel({
               listenUserAudio && listenPaused
                 ? "自分のマイクが入っている間は、声の回り込みを防ぐため鳴らしません（マイクを切れば戻ります）"
                 : listenUserAudio
-                  ? "お客様の声を鳴らすのをやめる"
-                  : "お客様の声をこの画面のスピーカーで聞く"
+                  ? "お客様音声を鳴らすのをやめる"
+                  : "お客様音声をこの画面のスピーカーで聞く"
             }
           >
             {listenUserAudio && !listenPaused ? <Volume2 size={14} /> : <VolumeX size={14} />}
-            {listenUserAudio && listenPaused ? "お客様の声 停止中" : listenUserAudio ? "お客様の声 ON" : "お客様の声 OFF"}
+            {listenUserAudio && listenPaused ? "お客様音声 停止中" : listenUserAudio ? "お客様音声 ON" : "お客様音声 OFF"}
           </button>
           <button
             onClick={onEnd}
