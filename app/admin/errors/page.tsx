@@ -20,6 +20,8 @@ const TYPE_LABELS: Record<string, { label: string; color: string }> = {
   "stt-guard-dump": { label: "認識ガード（用語集羅列）", color: "bg-gray-100 text-gray-600" },
   "stt-guard-conf": { label: "認識ガード（自信度）", color: "bg-gray-100 text-gray-600" },
   "stt-guard-run": { label: "認識ガード（連番暴走）", color: "bg-gray-100 text-gray-600" },
+  "camera": { label: "カメラ異常", color: "bg-orange-100 text-orange-700" },
+  "client-error": { label: "端末側エラー", color: "bg-red-100 text-red-700" },
 };
 
 function jst(ms: number): string {
@@ -104,6 +106,7 @@ export default function ErrorsPage() {
                   <th className="px-4 py-2.5 font-medium whitespace-nowrap">種類</th>
                   <th className="px-4 py-2.5 font-medium whitespace-nowrap">端末</th>
                   <th className="px-4 py-2.5 font-medium whitespace-nowrap">係員</th>
+                  <th className="px-4 py-2.5 font-medium whitespace-nowrap">版</th>
                   <th className="px-4 py-2.5 font-medium">内容</th>
                 </tr>
               </thead>
@@ -124,6 +127,8 @@ export default function ErrorsPage() {
                       </td>
                       <td className="px-4 py-2.5 text-gray-600 whitespace-nowrap">{e.machineName ?? "—"}</td>
                       <td className="px-4 py-2.5 text-gray-600 whitespace-nowrap">{e.staffName ?? "—"}</td>
+                      {/* どの版で起きたか。修正済みの版かを即断するために出す（提案①） */}
+                      <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{e.version ?? "—"}</td>
                       <td className="px-4 py-2.5 text-gray-700 break-all">{e.detail ?? "—"}</td>
                     </tr>
                   );

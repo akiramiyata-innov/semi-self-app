@@ -2,7 +2,8 @@
 // 数秒まとめてから保存する（発生のたびに書くとSTTガードの連続破棄などで
 // 書き込みが暴れるため）。保存の失敗で通話処理を巻き添えにしない。
 import type { AppErrorEntry } from "../lib/types";
-import { getAppErrorsFresh, saveAppErrors } from "../lib/errorLogClient";
+import { getAppErrorsFresh, saveAppErrors, appendAppErrorArchive } from "../lib/errorLogClient";
+import { APP_VERSION } from "../lib/appVersion";
 
 const FLUSH_DELAY_MS = 3000;
 const pending: AppErrorEntry[] = [];
@@ -33,7 +34,8 @@ export function recordSocketError(socketId: string, entry: Omit<AppErrorEntry, "
 }
 
 export function recordAppError(entry: Omit<AppErrorEntry, "at">): void {
-  pending.push({ at: Date.now(), ...entry });
+  // どの版で起きたかを全件に自動で書き添える（リリース後の調査で最初に見る情報）
+  pending.push({ at: Date.now(), version: APP_VERSION, ...entry });
   if (!flushTimer) {
     flushTimer = setTimeout(() => {
       flushTimer = null;
@@ -51,5 +53,11 @@ async function flush(): Promise<void> {
   } catch (e) {
     // 記録に失敗しても本体の動作は続ける（コンソールには残す）
     console.error("[error-log] 障害履歴の保存に失敗:", e);
+  }
+  try {
+    // 日別の保管（最新500件とは別の、消えない置き場）。提案④
+    await appendAppErrorArchive(items);
+  } catch (e) {
+    console.error("[error-log] 日別保管への追記に失敗:", e);
   }
 }

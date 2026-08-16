@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Monitor, MonitorOff, Mic, MicOff, PhoneOff, Send, MessageSquareText, MessageSquareOff } from "lucide-react";
+import { Monitor, MonitorOff, Mic, MicOff, PhoneOff, Send, MessageSquareText, MessageSquareOff, VideoOff } from "lucide-react";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { ScreenShareView } from "./ScreenShareView";
 import { Flag } from "./Flag";
@@ -17,6 +17,10 @@ interface ActiveCallPanelProps {
   interimUserText?: string;
   interimStaffText?: string;
   userCameraFaceFrame?: string | null;
+  /** 券面カメラの映像が最後に届いた時刻。しばらく届いていなければ「映像なし」に切り替える。 */
+  userCameraFaceFrameAt?: number | null;
+  /** お客様側から申告されたカメラ異常の説明。「映像なし」の枠に理由として出す。 */
+  userCameraError?: string | null;
   isCapturing: boolean;
   isListening: boolean;
   /**
@@ -67,6 +71,8 @@ export function ActiveCallPanel({
   interimUserText,
   interimStaffText,
   userCameraFaceFrame,
+  userCameraFaceFrameAt,
+  userCameraError,
   isCapturing,
   isListening,
   spaceShortcut = true,
@@ -88,6 +94,18 @@ export function ActiveCallPanel({
   const [inputText, setInputText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const lang = SUPPORTED_LANGS.find((l) => l.code === userLang);
+
+  // 券面カメラの「映像なし」判定（C-1）。最後のフレームから8秒（送信は0.2秒間隔）
+  // 届かなければ途絶とみなす。時間の経過で表示が変わるよう、2秒ごとに現在時刻を刻む。
+  const CAMERA_STALE_MS = 8000;
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 2000);
+    return () => clearInterval(t);
+  }, []);
+  const cameraLive = !!userCameraFaceFrame
+    && userCameraFaceFrameAt != null
+    && nowTick - userCameraFaceFrameAt < CAMERA_STALE_MS;
 
   const onTypingChangeRef = useRef(onTypingChange);
   useEffect(() => { onTypingChangeRef.current = onTypingChange; }, [onTypingChange]);
@@ -284,16 +302,29 @@ export function ActiveCallPanel({
         </div>
 
         {/* Camera feed from kiosk: 券面カメラ。
-            1件だけ対応しているときは券面の文字が読み取りやすいよう倍の大きさで出す。 */}
-        {userCameraFaceFrame && (
-          <div className={`border-l border-gray-100 p-2 shrink-0 flex flex-col gap-2 overflow-y-auto ${soloView ? "w-[28rem]" : "w-56"}`}>
+            1件だけ対応しているときは券面の文字が読み取りやすいよう倍の大きさで出す。
+            ★映像が無いときも枠を出し「映像なし」と示す（C-1）。従来は枠ごと消えていた
+            ため、カメラの不調に係員が気づけず、切り分けの手がかりも残らなかった。 */}
+        <div className={`border-l border-gray-100 p-2 shrink-0 flex flex-col gap-2 overflow-y-auto ${soloView ? "w-[28rem]" : "w-56"}`}>
+          {cameraLive ? (
             <ScreenShareView
-              frameData={userCameraFaceFrame}
+              frameData={userCameraFaceFrame!}
               label="券面カメラ"
               className={`shrink-0 ${soloView ? "h-80" : "h-40"}`}
             />
-          </div>
-        )}
+          ) : (
+            <div
+              className={`shrink-0 ${soloView ? "h-80" : "h-40"} rounded-lg bg-gray-100 border-2 border-dashed border-gray-300 flex flex-col items-center justify-center gap-1.5 px-2 text-center`}
+            >
+              <VideoOff size={soloView ? 28 : 20} className="text-gray-400" />
+              <span className="text-xs font-bold text-gray-500">券面カメラ　映像なし</span>
+              <span className="text-[10px] text-orange-600 font-medium leading-snug">
+                {userCameraError
+                  ?? (userCameraFaceFrame ? "映像が途絶えています" : "お客様側から映像が届いていません")}
+              </span>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Quick-reply buttons (one-tap send of saved phrases) ── */}

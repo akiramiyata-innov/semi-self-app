@@ -11,6 +11,8 @@ import type { ToastItem } from "@/components/Toast";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import type { MicErrorCode } from "@/hooks/useSpeechRecognition";
 import { useScreenCapture } from "@/hooks/useScreenCapture";
+import { installClientErrorReporter } from "@/lib/clientErrorReporter";
+import { APP_VERSION } from "@/lib/appVersion";
 import type { TranscriptEntry } from "@/lib/types";
 import type { LangCode, StaffStatus, StaffInfo } from "@/lib/socketEvents";
 
@@ -52,6 +54,10 @@ interface ActiveSession {
   interimUserText: string;
   interimStaffText: string;
   userCameraFaceFrame: string | null;
+  /** 券面カメラの映像が最後に届いた時刻。途絶（映像なし）表示の判定に使う。 */
+  userCameraFaceFrameAt: number | null;
+  /** お客様側から申告されたカメラ異常の説明（無ければnull）。「映像なし」の枠に出す。 */
+  userCameraError: string | null;
   isListening: boolean;
   isCapturing: boolean;
   /** お客様が今話しているか（音量で判定。確定テキストが出るまで点灯し続ける）。 */
@@ -705,11 +711,34 @@ export default function StaffPage() {
         next.set(payload.sessionId, payload.frameData);
         return next;
       });
-      updateSession(payload.sessionId, { userCameraFaceFrame: payload.frameData });
+      // 映像が届いた＝カメラは生きている。到着時刻を持ち（途絶の判定に使う）、
+      // 出ていた異常表示は消す。
+      updateSession(payload.sessionId, {
+        userCameraFaceFrame: payload.frameData,
+        userCameraFaceFrameAt: Date.now(),
+        userCameraError: null,
+      });
+    });
+
+    // お客様側のカメラ異常（取得失敗の種類つき・C-1）。「映像なし」の枠に理由を出す。
+    s.on("camera:error", (payload: { sessionId: string; code: string }) => {
+      const CAM_ERR_JA: Record<string, string> = {
+        "denied": "お客様の端末でカメラの使用が許可されていません",
+        "in-use": "お客様の端末で他のアプリがカメラを使用中です",
+        "not-found": "お客様の端末にカメラが見つかりません",
+        "gone": "お客様の端末のカメラが外れました",
+        "error": "お客様の端末でカメラを取得できませんでした",
+      };
+      updateSession(payload.sessionId, { userCameraError: CAM_ERR_JA[payload.code] ?? CAM_ERR_JA["error"] });
     });
 
     return () => { s.disconnect(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 画面のプログラムエラーをサーバーの障害履歴へ申告する（提案②）
+  useEffect(() => {
+    return installClientErrorReporter(() => socketRef.current, "staff");
   }, []);
 
   // ── Actions ───────────────────────────────────────────────────────────────
@@ -728,6 +757,8 @@ export default function StaffPage() {
       interimStaffText: "",
       // Carry over the ringing-preview face frame so there's no blank flash on answer
       userCameraFaceFrame: previewFaceFrames.get(call.sessionId) ?? null,
+      userCameraFaceFrameAt: previewFaceFrames.has(call.sessionId) ? Date.now() : null,
+      userCameraError: null,
       isListening: false,
       isCapturing: false,
       userSpeaking: false,
@@ -949,7 +980,11 @@ export default function StaffPage() {
             </div>
             <div>
               <h1 className="font-bold text-gray-900 text-sm">遠隔接客スタッフ画面</h1>
-              <p className="text-xs text-gray-400">Remote Customer Service Console</p>
+              <p className="text-xs text-gray-400">
+                Remote Customer Service Console
+                {/* 実行中の版。不具合報告のとき「どの版か」を読み上げてもらう（提案①） */}
+                <span className="ml-1.5 text-gray-300">{APP_VERSION}</span>
+              </p>
             </div>
           </div>
 
@@ -1406,6 +1441,8 @@ export default function StaffPage() {
                   interimUserText={session.interimUserText}
                   interimStaffText={session.interimStaffText}
                   userCameraFaceFrame={session.userCameraFaceFrame}
+                  userCameraFaceFrameAt={session.userCameraFaceFrameAt}
+                  userCameraError={session.userCameraError}
                   isListening={isListening}
                   spaceShortcut={!spaceDisabled}
                   isCapturing={capturing && captureSessionRef.current === session.sessionId}

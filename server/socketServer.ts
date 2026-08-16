@@ -10,7 +10,8 @@ import type { TranscriptEntry, SessionLog } from "../lib/types";
 import { isGCSEnabled, uploadLog } from "../lib/gcsClient";
 import { getGlossaryTermsFresh } from "../lib/glossaryClient";
 import { getAssignmentsFresh } from "../lib/assignmentClient";
-import { recordAppError, setSocketContextResolver } from "./errorLog";
+import { recordAppError, recordSocketError, setSocketContextResolver } from "./errorLog";
+import { APP_VERSION } from "../lib/appVersion";
 import type { GlossaryTerm } from "../lib/types";
 import { registerSttHandlers } from "./sttStream";
 import { verifySessionToken, SESSION_COOKIE_NAME } from "../lib/session";
@@ -99,6 +100,10 @@ interface ActiveSession extends CallRecord {
    * どちらからでも切り替えられ、**後から操作したほうが必ず勝つ**。
    */
   textVisible: boolean;
+  /** 券面カメラの映像が最後に届いた時刻。映像の途絶検知（C-1）に使う。 */
+  lastFaceFrameAt?: number;
+  /** 今回の途絶をすでに障害履歴へ記録したか（1回の途絶で1件だけ記録する）。 */
+  faceStallRecorded?: boolean;
 }
 
 /** 「お客様発話中」が確定テキストなしで残り続けないようにする上限。 */
@@ -139,6 +144,7 @@ async function saveSessionLog(session: ActiveSession): Promise<void> {
     durationSeconds: Math.round((endedAt - session.startedAt) / 1000),
     transcript: session.transcript,
     metrics: metrics.takeMetrics(session.sessionId),
+    appVersion: APP_VERSION, // どの版での通話かを記録に残す（提案①）
   };
   const date = jstDateString(endedAt);
 
@@ -803,6 +809,30 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     next();
   });
 
+  // ── 券面カメラの映像途絶の見張り（C-1）──────────────────────────────────
+  // 一度でも映像が届いた通話で、10秒以上フレームが来なくなったら障害履歴に残す。
+  // 通話自体は続いているのにカメラだけ止まった事象（実測: 2026-08-16 S10 で発生）を、
+  // 後から「いつ・どの通話で」と追えるようにする。1回の途絶で記録は1件だけ
+  // （復旧したら印を戻し、次の途絶をまた記録できるようにする）。
+  const FACE_STALL_MS = 10_000;
+  setInterval(() => {
+    const now = Date.now();
+    activeSessions.forEach((session, sessionId) => {
+      if (!session.lastFaceFrameAt || session.faceStallRecorded) return;
+      if (now - session.lastFaceFrameAt < FACE_STALL_MS) return;
+      session.faceStallRecorded = true;
+      recordAppError({
+        type: "camera",
+        sessionId,
+        machineName: session.machineName,
+        staffName: staffNameOfSession(session),
+        side: "user",
+        detail: `券面カメラの映像が${Math.round(FACE_STALL_MS / 1000)}秒以上途絶えた（通話は継続中）`,
+      });
+      console.log(`[camera] 映像途絶を記録: ${session.machineName} (${sessionId})`);
+    });
+  }, 5_000);
+
   io.on("connection", (socket: Socket) => {
 
     // ── Streaming STT (real-time, glossary-aware, long-form) ──────────────────
@@ -1336,6 +1366,14 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       if (session) {
         // Only the session's kiosk user may send its camera frames.
         if (session.userSocketId !== socket.id) return;
+        // 券面カメラの生存記録（途絶検知用）。復旧したら次の途絶も記録できるよう印を戻す
+        if (camera !== "hand") {
+          session.lastFaceFrameAt = Date.now();
+          if (session.faceStallRecorded) {
+            session.faceStallRecorded = false;
+            console.log(`[camera] 券面カメラの映像が復旧: ${session.machineName} (${sessionId})`);
+          }
+        }
         io.to(session.staffSocketId).emit("screen:frame", { sessionId, frameData, camera });
         return;
       }
@@ -1349,6 +1387,78 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       getEligibleStaffSocketIds(pending.stationId).forEach((sid) => {
         io.to(sid).emit("screen:frame", { sessionId, frameData, camera });
       });
+    });
+
+    // ── 端末側の異常の受け口（提案②・C-1）────────────────────────────────────
+    // キオスク・係員画面で起きたことはサーバーからは見えない。導入後は端末を直接
+    // 調べられないため、端末側から申告してもらい障害履歴へ残す。
+    // 連投防止: 1ソケットにつき申告の種類ごとに1分に3件まで（画面側の暴走・悪意の
+    // 連投で障害履歴が埋まり、本物の記録が押し出されるのを防ぐ）。種類ごとに分ける
+    // のは、カメラ異常の連発が画面エラーの記録枠まで食い潰さないようにするため。
+    const clientReportLimit = new Map<string, { windowStart: number; count: number }>();
+    const allowClientReport = (kind: string): boolean => {
+      const now = Date.now();
+      const lim = clientReportLimit.get(kind) ?? { windowStart: now, count: 0 };
+      if (now - lim.windowStart > 60_000) {
+        lim.windowStart = now;
+        lim.count = 0;
+      }
+      lim.count++;
+      clientReportLimit.set(kind, lim);
+      return lim.count <= 3;
+    };
+
+    // 画面のプログラムエラー（window.onerror / unhandledrejection）
+    socket.on("client:error", (payload: { page?: string; machineName?: string; detail?: string }) => {
+      if (!allowClientReport("client")) return;
+      const detail = String(payload?.detail ?? "").slice(0, 300);
+      if (!detail) return;
+      const entry: Parameters<typeof recordSocketError>[1] = {
+        type: "client-error",
+        side: payload?.page === "staff" ? "staff" : "user",
+        detail: `画面のプログラムエラー: ${detail}`,
+      };
+      // 端末名は申告値があれば添える（キオスクは匿名接続のため自己申告しかない）
+      if (typeof payload?.machineName === "string" && payload.machineName.trim()) {
+        entry.machineName = payload.machineName.slice(0, 40);
+      }
+      recordSocketError(socket.id, entry);
+      console.log(`[client-error] ${entry.side} ${entry.machineName ?? ""}: ${detail.slice(0, 80)}`);
+    });
+
+    // カメラの取得失敗（C-1）。キオスクが getUserMedia の失敗を種類つきで申告する。
+    const CAMERA_ERR_JA: Record<string, string> = {
+      "denied": "カメラの使用が許可されていない",
+      "in-use": "他のアプリがカメラを使用中で取得できない",
+      "not-found": "カメラが見つからない（未接続・無効）",
+      "gone": "使っていたカメラが外れた（接続し直しが必要）",
+      "error": "カメラの取得に失敗した",
+    };
+    socket.on("camera:error", (payload: { sessionId?: string; machineName?: string; camera?: string; code?: string; detail?: string }) => {
+      if (!allowClientReport("camera")) return;
+      const code = CAMERA_ERR_JA[payload?.code ?? ""] ? payload!.code! : "error";
+      const camera = payload?.camera === "hand" ? "手元カメラ" : payload?.camera === "detect" ? "カメラ検出" : "券面カメラ";
+      const extra = String(payload?.detail ?? "").slice(0, 120);
+      // 通話が特定できる場合はその通話の担当・端末を記録に添える
+      const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : undefined;
+      const session = sessionId ? activeSessions.get(sessionId) : undefined;
+      if (session && session.userSocketId !== socket.id) return; // 本人のキオスクのみ
+      const entry: Parameters<typeof recordSocketError>[1] = {
+        type: "camera",
+        side: "user",
+        detail: `${camera}: ${CAMERA_ERR_JA[code]}${extra ? `（${extra}）` : ""}`,
+      };
+      if (sessionId) entry.sessionId = sessionId;
+      if (session) {
+        entry.machineName = session.machineName;
+        entry.staffName = staffNameOfSession(session);
+        // 担当の係員画面へも知らせる（「映像なし」の枠に理由を出す）
+        io.to(session.staffSocketId).emit("camera:error", { sessionId, code });
+      } else if (typeof payload?.machineName === "string" && payload.machineName.trim()) {
+        entry.machineName = payload.machineName.slice(0, 40);
+      }
+      recordSocketError(socket.id, entry);
+      console.log(`[camera] 取得失敗 ${entry.machineName ?? ""}: ${entry.detail}`);
     });
 
     // ── Language update ───────────────────────────────────────────────────────

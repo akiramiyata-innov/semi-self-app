@@ -53,6 +53,8 @@ export interface SessionLog {
   transcript: TranscriptEntry[];
   /** 自動測定値。性能検証で使用（通常運用では参照されない）。 */
   metrics?: SessionMetrics;
+  /** 通話時に動いていたアプリの版（例: "v1.41.0"）。 */
+  appVersion?: string;
 }
 
 export interface SessionSummary {
@@ -84,4 +86,6 @@ export interface AppErrorEntry {
   side?: "user" | "staff";
   /** 人が読む詳細（エラー内容・しきい値・対象テキストなど） */
   detail?: string;
+  /** 発生時に動いていたアプリの版（例: "v1.41.0"）。修正済みの版かを即断するため。 */
+  version?: string;
 }

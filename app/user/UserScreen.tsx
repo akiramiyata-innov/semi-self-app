@@ -12,6 +12,7 @@ import { unlockAudioContext } from "@/lib/audioUnlock";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import type { MicErrorCode } from "@/hooks/useSpeechRecognition";
 import { useScreenCapture } from "@/hooks/useScreenCapture";
+import { installClientErrorReporter } from "@/lib/clientErrorReporter";
 import type { TranscriptEntry } from "@/lib/types";
 import type { LangCode } from "@/lib/socketEvents";
 
@@ -350,6 +351,29 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   // permission request/error on the language-select screen.
   const cameraDevicesRef = useRef<{ face?: string; hand?: string } | null>(null);
 
+  /**
+   * カメラの取得失敗を種類つきでサーバーへ申告する（C-1）。障害履歴に残り、
+   * 通話中なら係員画面の「映像なし」の枠に理由が出る。導入後の窓処端末は
+   * 直接調べられないため、この申告が唯一の手がかりになる。
+   */
+  const reportCameraError = useCallback((camera: "face" | "hand" | "detect", err: unknown) => {
+    const name = (err as { name?: string } | null)?.name ?? "";
+    const code =
+      name === "NotAllowedError" || name === "SecurityError" ? "denied"
+      : name === "NotFoundError" ? "not-found"
+      : name === "NotReadableError" || name === "AbortError" ? "in-use"
+      : name === "OverconstrainedError" ? "gone"
+      : "error";
+    socketRef.current?.emit("camera:error", {
+      sessionId: sessionIdRef.current ?? undefined,
+      machineName,
+      camera,
+      code,
+      detail: String((err as Error | null)?.message ?? err ?? "").slice(0, 120),
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [machineName]);
+
   const detectCameraDevices = useCallback(async () => {
     if (cameraDevicesRef.current) return cameraDevicesRef.current;
     try {
@@ -372,9 +396,11 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       cameraDevicesRef.current = { face: faceCam?.deviceId, hand: handCam?.deviceId };
     } catch (e) {
       console.error("[camera] device enumeration failed:", e);
+      reportCameraError("detect", e); // 許可なし・他アプリが使用中・未接続などを記録
       cameraDevicesRef.current = {};
     }
     return cameraDevicesRef.current;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Face camera (正面) — auto-starts when call connects, streams frames to staff via screen:frame
@@ -388,6 +414,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         socketRef.current?.emit("screen:frame", { sessionId: sessionIdRef.current, frameData, camera: "face" });
       }
     },
+    onError: (err) => reportCameraError("face", err),
   });
 
   // Hand camera (手元) — only started if a second camera device was detected
@@ -401,6 +428,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         socketRef.current?.emit("screen:frame", { sessionId: sessionIdRef.current, frameData, camera: "hand" });
       }
     },
+    onError: (err) => reportCameraError("hand", err),
   });
 
   // Face camera starts as soon as the call starts ringing — lets staff see who's
@@ -586,6 +614,13 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       window.removeEventListener("offline", handleOffline);
       window.removeEventListener("online", handleOnline);
     };
+  }, []);
+
+  // 画面のプログラムエラーをサーバーの障害履歴へ申告する（提案②）。
+  // 導入後の窓処端末は直接調べられないため、端末側で起きたことを残す唯一の経路。
+  useEffect(() => {
+    return installClientErrorReporter(() => socketRef.current, "user", () => machineName);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Clears all per-call state (transcript, session, staff frame/audio, mic).

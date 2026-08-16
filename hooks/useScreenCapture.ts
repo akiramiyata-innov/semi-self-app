@@ -8,6 +8,8 @@ interface UseScreenCaptureOptions {
   width?: number;
   height?: number;
   onFrame?: (frameData: string) => void;
+  /** 取得に失敗したとき（許可なし・他アプリが使用中など）。障害履歴への申告用。 */
+  onError?: (err: unknown) => void;
 }
 
 export function useScreenCapture({
@@ -16,16 +18,19 @@ export function useScreenCapture({
   width = 640,
   height = 360,
   onFrame,
+  onError,
 }: UseScreenCaptureOptions) {
   const streamRef = useRef<MediaStream | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const onFrameRef = useRef(onFrame);
+  const onErrorRef = useRef(onError);
   const [capturing, setCapturing] = useState(false);
 
   // Keep onFrame ref fresh so the interval always uses the latest callback
   onFrameRef.current = onFrame;
+  onErrorRef.current = onError;
 
   const stopCapture = useCallback(() => {
     if (intervalRef.current) {
@@ -94,6 +99,7 @@ export function useScreenCapture({
       } catch (err) {
         console.error("Screen capture error:", err);
         setCapturing(false);
+        onErrorRef.current?.(err);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
