@@ -14,6 +14,7 @@ import { recordAppError, recordSocketError, setSocketContextResolver } from "./e
 import { APP_VERSION } from "../lib/appVersion";
 import type { GlossaryTerm } from "../lib/types";
 import { registerSttHandlers } from "./sttStream";
+import { splitForSpeech } from "./ttsSplit";
 import { verifySessionToken, SESSION_COOKIE_NAME } from "../lib/session";
 import type { SessionPayload } from "../lib/session";
 import * as metrics from "./metrics";
@@ -539,64 +540,6 @@ async function translateWithGlossary(text: string, fromLang: string, toLang: str
   return result;
 }
 
-// Chirp3-HD rejects any single sentence longer than ~300 bytes ("This request
-// contains sentences that are too long"). Real staff speech comes from STT with
-// no sentence-ending punctuation, so it arrives as one long run-on that trips
-// this limit. We split the text into pieces safely under the cap, synthesize
-// each, and concatenate the MP3 bytes (which decode fine as one stream).
-// Each seam adds ~0.4s of silence, so we split as few times as safely possible
-// and cut at word-ish boundaries so that pause lands sensibly, not mid-word.
-const MAX_TTS_BYTES = 250;
-
-type Script = "kanji" | "hira" | "kata" | "other";
-function scriptOf(ch: string): Script {
-  const c = ch.codePointAt(0) ?? 0;
-  if (c >= 0x4e00 && c <= 0x9fff) return "kanji";
-  if (c >= 0x3040 && c <= 0x309f) return "hira";
-  if ((c >= 0x30a0 && c <= 0x30ff) || (c >= 0xff66 && c <= 0xff9d)) return "kata";
-  return "other";
-}
-
-/** Split text into pieces each ≤ MAX_TTS_BYTES, preferring natural breaks. */
-function splitForTts(text: string): string[] {
-  const clean = text.trim();
-  if (!clean) return [];
-  if (Buffer.byteLength(clean) <= MAX_TTS_BYTES) return [clean];
-
-  // Break after sentence/clause punctuation, keeping the delimiter with its piece.
-  const units = clean.split(/(?<=[。．！？!?、,\n])/);
-  const chunks: string[] = [];
-  let buf = "";
-  const flush = () => { const t = buf.trim(); if (t) chunks.push(t); buf = ""; };
-
-  for (let unit of units) {
-    // A punctuation-free unit can exceed the cap. Split it, cutting just before a
-    // hiragana→kanji/katakana transition (usually a word start) near the target so
-    // the seam pause lands at a word boundary instead of mid-word. Fall back to a
-    // plain length cut when no such boundary is in range.
-    while (Buffer.byteLength(unit) > MAX_TTS_BYTES) {
-      let hardCut = unit.length;
-      while (hardCut > 1 && Buffer.byteLength(unit.slice(0, hardCut)) > MAX_TTS_BYTES) hardCut--;
-      let cut = hardCut;
-      const minCut = Math.floor(hardCut * 0.6);
-      for (let i = hardCut; i > minCut; i--) {
-        if (scriptOf(unit[i - 1]) === "hira" && (scriptOf(unit[i]) === "kanji" || scriptOf(unit[i]) === "kata")) {
-          cut = i;
-          break;
-        }
-      }
-      flush();
-      chunks.push(unit.slice(0, cut));
-      unit = unit.slice(cut);
-    }
-    if (Buffer.byteLength(buf + unit) > MAX_TTS_BYTES) flush();
-    buf += unit;
-  }
-  flush();
-  return chunks;
-}
-
-/** Synthesize one piece (already within the length limit). Returns MP3 bytes or null. */
 async function synthesizeChunk(text: string, voiceLangCode: string, voiceName: string, apiKey: string, langCode: LangCode): Promise<Buffer | null> {
   try {
     const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`;
@@ -737,47 +680,51 @@ async function toSpeakableJa(text: string): Promise<string> {
   return out;
 }
 
-/**
- * 音声合成の結果。`ok` は「言われたことを丸ごと音声にできたか」。
- * 長文は分割して合成するため、一部の断片だけ失敗すると **途中が抜けた音声** に
- * なる。無音より気づきにくいので、丸ごと失敗と同じ扱い（ok=false）にする。
- */
-interface TtsResult {
-  audio: string;
+/** `synthesizeAndStream` の結果。partial＝一部だけ届いた（＝途中が抜けた音声）。 */
+interface TtsStreamResult {
+  /** すべての断片を作れたか。 */
   ok: boolean;
+  /** 実際に送れた断片の数。 */
+  sent: number;
+  /** 作ろうとした断片の数。 */
+  total: number;
 }
 
-async function synthesizeSpeech(text: string, langCode: LangCode): Promise<TtsResult> {
+/**
+ * 文の切れ目ごとに音声を作り、**できた順（＝文の順）に呼び出し元へ渡す**（C-2）。
+ *
+ * 従来は全文を作り終えてから一度に送っていたので、長い案内ほどお客様を待たせた。
+ * ここでは全部を同時に作り始めたうえで、1文目から順に渡す。呼び出し元は1文目を
+ * 受け取った時点で送り出せるので、**話し始めが「1文目の合成時間」まで縮む**。
+ *
+ * 実測（日本語・3回平均）: 53字の返答で 2.14秒 → 0.63秒、101字で 3.53秒 → 0.81秒。
+ */
+async function synthesizeAndStream(
+  text: string,
+  langCode: LangCode,
+  onPiece: (audioBase64: string, index: number) => void,
+): Promise<TtsStreamResult> {
   const lang = getLang(langCode);
   const apiKey = getApiKey();
-
   if (!apiKey || apiKey === "your_google_api_key_here") {
     console.warn(`[tts] SKIP (no API key): "${text}" [${langCode}]`);
-    return { audio: "", ok: false };
+    return { ok: false, sent: 0, total: 0 };
   }
-
-  // Derive the languageCode from the voice name's own locale prefix rather than
-  // lang.bcp47. The Chirp3-HD voices are strict: e.g. cmn-CN-Chirp3-HD-Aoede
-  // rejects "zh-CN" and demands "cmn-CN". (bcp47 stays "zh-CN" for STT / Web
-  // Speech fallback, where that BCP-47 tag is correct.)
   const voiceLangCode = lang.ttsVoice.split("-").slice(0, 2).join("-");
+  const pieces = splitForSpeech(text, langCode);
+  if (!pieces.length) return { ok: false, sent: 0, total: 0 };
 
-  const chunks = splitForTts(text);
-  if (!chunks.length) return { audio: "", ok: false };
-
-  // Synthesize the pieces in parallel, then join the MP3 bytes in order.
-  const parts = await Promise.all(chunks.map((c) => synthesizeChunk(c, voiceLangCode, lang.ttsVoice, apiKey, langCode)));
-  const buffers = parts.filter((b): b is Buffer => b !== null);
-  if (!buffers.length) return { audio: "", ok: false };
-
-  const combined = Buffer.concat(buffers);
-  // 1つでも欠けたら「途中が抜けた音声」なので、丸ごと失敗と同じ扱いにする。
-  const ok = buffers.length === chunks.length;
-  if (!ok) {
-    console.error(`[tts] 一部の断片が合成できなかった [${langCode}] ${buffers.length}/${chunks.length} part(s)`);
+  // 全部同時に作り始める（待ち時間を積み上げない）。受け取りだけを順番に行う。
+  const jobs = pieces.map((p) => synthesizeChunk(p, voiceLangCode, lang.ttsVoice, apiKey, langCode));
+  let sent = 0;
+  for (const job of jobs) {
+    const buf = await job;
+    if (!buf) continue; // 作れなかった断片は飛ばす（呼び出し元が ok=false で気づく）
+    onPiece(buf.toString("base64"), sent);
+    sent++;
   }
-  console.log(`[tts] synthesized "${text.slice(0, 30)}${text.length > 30 ? "…" : ""}" [${langCode}] in ${chunks.length} part(s) → ${combined.length} bytes`);
-  return { audio: combined.toString("base64"), ok };
+  console.log(`[tts] streamed "${text.slice(0, 30)}${text.length > 30 ? "…" : ""}" [${langCode}] ${sent}/${pieces.length} piece(s)`);
+  return { ok: sent === pieces.length, sent, total: pieces.length };
 }
 
 function generateSessionId(): string {
@@ -1304,8 +1251,6 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
         const userLang = session.userLang;
         let translatedText: string | undefined;
-        let audioBase64 = "";
-        let tts: TtsResult = { audio: "", ok: false };
 
         if (isFinal) {
           metrics.noteStaffSpeechFinal(sessionId);
@@ -1331,6 +1276,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         // 翻訳と読み上げには、つなぎ言葉を落とし記号を読みに直した文を使う。
         // 係員画面の表示と通話ログは原文（text）のままなので、係員が言ったことは残る。
         const spoken = toSpokenText(text);
+        let speakText: string;
         if (userLang !== "ja") {
           try {
             translatedText = await translateWithGlossary(spoken, "ja", userLang);
@@ -1341,13 +1287,45 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
             io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "jaToUser" });
             translatedText = text; // fallback: send Japanese text as-is
           }
-          tts = await synthesizeSpeech(translatedText!, userLang);
+          speakText = translatedText!;
         } else {
           translatedText = text;
           // 表示は text（登録どおりの SUICA）のまま、音声には読み（すいか）を渡す
-          tts = await synthesizeSpeech(await toSpeakableJa(spoken), "ja");
+          speakText = await toSpeakableJa(spoken);
         }
-        audioBase64 = tts.audio;
+
+        /**
+         * お客様への文字は「音声より先に、1回だけ」送る（C-2）。
+         *
+         * ★順番が重要: キオスクはこの確定を受けてマイクを一時停止する。音声が先に
+         * 着くと、アバターの声を自分のマイクが拾ってしまう。1文目ができた時点で
+         * 送るので、従来（全文の合成を待ってから送る）より早く届く。
+         */
+        let userTextSent = false;
+        const sendUserText = (forceShowText: boolean) => {
+          if (userTextSent) return;
+          userTextSent = true;
+          io.to(session.userSocketId).emit("speech:staff", {
+            sessionId, text: translatedText, isFinal: true, forceShowText,
+          });
+        };
+
+        const tts = await synthesizeAndStream(speakText, userLang, (audio, index) => {
+          if (index === 0) {
+            sendUserText(false);
+            metrics.noteTtsSent(sessionId); // 測定は「1文目が出せた時刻」＝実際に声が始まる時刻
+          }
+          io.to(session.userSocketId).emit("tts:audio", { sessionId, audioBase64: audio, lang: userLang });
+        });
+        // 1つも作れなかった＝音声ゼロ。テキスト非表示の設定でもこの1件だけは文字を出す
+        // （音声も文字も無い＝お客様に何も届かない状態を防ぐ）。
+        sendUserText(true);
+        // ★「この返答の音声はこれで全部」の合図。
+        //   文ごとに送るようになったため、キオスクは1つ目を鳴らし終えた時点では
+        //   まだ続きが来るのかどうか分からない。これが無いと、2つ目が間に合わなかった
+        //   ときに読み上げ終了と誤判定し、**お客様のマイクが返答の途中で戻る**／
+        //   **待たせていた通話終了が先に進んでしまう**。
+        io.to(session.userSocketId).emit("tts:done", { sessionId });
 
         // 係員画面には日本語の原文に加えて訳文も返す。clientId は係員側が先に表示した
         // 吹き出しを特定するための目印（同じ文言を続けて話しても取り違えない）。
@@ -1358,24 +1336,15 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           translationFailed, voiceFailed: !tts.ok,
         });
 
-        // 音声を丸ごと届けられなかったときは、テキスト非表示の設定であっても
-        // この1件だけは文字を出す（音声も文字も無い＝お客様に何も届かない状態を防ぐ）。
-        io.to(session.userSocketId).emit("speech:staff", {
-          sessionId, text: translatedText, isFinal: true,
-          forceShowText: !tts.ok,
-        });
-
-        if (audioBase64) {
-          io.to(session.userSocketId).emit("tts:audio", { sessionId, audioBase64, lang: userLang });
-          metrics.noteTtsSent(sessionId);
-        }
-
         // 係員は自分の発言が普通に表示されるため、音声が届かなかったことに気づけない。
         // 言い直せるように知らせる。partial=途中が抜けた音声が再生された場合。
         if (!tts.ok) {
-          const partial = audioBase64.length > 0;
+          const partial = tts.sent > 0;
+          // 途中が抜けた音声のときは、お客様の画面にも文字を出す。文字は音声より先に
+          // 送ってしまっているので、あとから「この発言は文字も出して」と伝える。
+          if (partial) io.to(session.userSocketId).emit("tts:incomplete", { sessionId });
           io.to(session.staffSocketId).emit("error:tts", { sessionId, partial, reason: "synthesis" });
-          console.error(`[tts] 音声を届けられなかった session=${sessionId} partial=${partial}`);
+          console.error(`[tts] 音声を届けられなかった session=${sessionId} partial=${partial} ${tts.sent}/${tts.total}`);
           recordAppError({ type: "tts-synthesis", sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), side: "staff", detail: `${partial ? "一部の" : ""}音声を合成できず文字のみ表示: ${text.slice(0, 60)}` });
         }
 

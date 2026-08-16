@@ -282,7 +282,21 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   // TTS state: the staff's speech is voiced only by Google TTS (base64 audio).
   // No browser Web-Speech fallback — that used a device voice (sometimes male),
   // which broke the consistent female station-attendant voice.
-  const [latestAudio, setLatestAudio] = useState<string | undefined>(undefined);
+  /**
+   * これから鳴らす音声の置き場と、その合図（v1.43.0）。
+   *
+   * 1つの返答が**文ごとに何回かに分けて**届くようになったため、state で
+   * 「最後に届いた1つ」を持つ方式では取りこぼす（同じ瞬間に2つ届くと前が消える／
+   * 中身が同じ2文だと変化なしとみなされて鳴らない）。箱に積む方式に変えた。
+   */
+  const audioQueueRef = useRef<string[]>([]);
+  const [audioTick, setAudioTick] = useState(0);
+  /**
+   * この返答の音声がまだ続くか（v1.43.0）。文ごとに分けて届くので、1つ鳴らし終えた
+   * だけでは読み上げ終了と判断できない。サーバーの `tts:done` で終わりを知る。
+   */
+  const [moreAudioComing, setMoreAudioComing] = useState(false);
+  // 前の返答の残りは、通話の切り替わり時などに `audioQueueRef.current = []` で捨てる。
 
   const [staffScreenFrame, setStaffScreenFrame] = useState<string | null>(null);
   // 通話中の言語変更。パネルを開いてから言語を選び、確認してはじめて切り替わる。
@@ -601,7 +615,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         setSessionId(null);
         sessionIdRef.current = null;
         setStaffScreenFrame(null);
-        setLatestAudio(undefined);
+        audioQueueRef.current = []; setMoreAudioComing(false); // 前の返答の残りを捨てる
         setInterimStaff("");
       } else {
         // Production env: actually disconnected — force reconnect
@@ -635,7 +649,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     setSessionId(null);
     sessionIdRef.current = null;
     setStaffScreenFrame(null);
-    setLatestAudio(undefined);
+    audioQueueRef.current = []; setMoreAudioComing(false); // 前の返答の残りを捨てる
     setDeliveredIds([]);
     setStaffComposing(false);
     // テキスト表示は通話ごとに既定（非表示）へ戻す。前のお客様の設定を引き継がない。
@@ -785,6 +799,8 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         // これから読み上げが来る（＝音声が出せなかった場合を除く）。通話終了が
         // 押されても、読み上げ終わりまで画面を切り替えないための印。
         speechPendingRef.current = !payload.forceShowText;
+        // 音声が来る予定＝読み上げが終わるまで「続きあり」にしておく
+        setMoreAudioComing(!payload.forceShowText);
         if (payload.forceShowText) {
           // 音声が無いので読み上げ終了の合図は来ない。文字を読む間だけ置いて進める。
           const pending = pendingEndRef.current;
@@ -793,7 +809,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             setTimeout(pending, NO_AUDIO_GRACE_MS);
           }
         }
-        setLatestAudio(undefined);
+        audioQueueRef.current = []; setMoreAudioComing(false); // 前の返答の残りを捨てる
         lastAvatarTextRef.current = payload.text;
         if (STREAMING_STT) {
           // 常時ON方式: マイクは切らず、読み上げの間だけ一時停止（無音を送る）。
@@ -812,10 +828,13 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     });
 
     s.on("tts:audio", (payload: { audioBase64: string }) => {
-      if (payload.audioBase64) {
-        setLatestAudio(payload.audioBase64);
-      }
+      if (!payload.audioBase64) return;
+      audioQueueRef.current.push(payload.audioBase64);
+      setAudioTick((t) => t + 1);
     });
+
+    // この返答の音声はこれで全部、の合図（文ごとに分けて届くため必要）
+    s.on("tts:done", () => setMoreAudioComing(false));
 
     s.on("screen:share", (payload: { frameData: string }) => {
       setStaffScreenFrame(payload.frameData || null);
@@ -1337,7 +1356,9 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
               ——アバターを別の場所に作り直すと読み上げ中の音声が止まるため。 */}
           <div className={sharing ? "shrink-0" : "h-full"} style={sharing ? { height: avatarFull } : undefined}>
             <Avatar
-              audioBase64={latestAudio}
+              audioQueueRef={audioQueueRef}
+              audioTick={audioTick}
+              moreAudioComing={moreAudioComing}
               onSpeakingChange={notifyAvatarSpeaking}
               onPlaybackError={handlePlaybackError}
               visible

@@ -4,8 +4,26 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getSharedAudioContext } from "@/lib/audioUnlock";
 
 interface AvatarProps {
-  /** Google TTS audio (base64 MP3) for the staff's speech. */
-  audioBase64?: string;
+  /**
+   * これから鳴らす音声（base64 MP3）の受け渡し箱。
+   *
+   * ★state ではなく ref で渡す（v1.43.0）。文ごとの先行再生では、1つの返答が
+   * **複数回に分けて**届く。state だと同じ瞬間に届いた2つがまとめられて
+   * 前のほうが消えたり、たまたま中身が同じ2文が「変化なし」とみなされて
+   * 鳴らされなかったりする。ref に積めばどちらも起きない。
+   */
+  audioQueueRef?: React.RefObject<string[]>;
+  /** 上の箱に何か積まれたことを知らせる合図（増えるたびに取り出す）。 */
+  audioTick?: number;
+  /**
+   * この返答の音声がまだ続くか（v1.43.0）。
+   *
+   * 文ごとに分けて届くようになったため、1つ鳴らし終えて箱が空でも
+   * **まだ続きが来る途中かもしれない**。true の間は読み上げ終了を伝えない。
+   * これが無いと、続きが間に合わなかったときにお客様のマイクが返答の途中で戻り、
+   * 待たせていた通話終了も先に進んでしまう。
+   */
+  moreAudioComing?: boolean;
   onSpeakingChange?: (speaking: boolean) => void;
   /**
    * 音声を再生できなかったときに呼ばれる（デコード失敗・自動再生のブロック等）。
@@ -66,7 +84,9 @@ function mouthForLevel(rms: number): MouthShape {
 }
 
 export function Avatar({
-  audioBase64,
+  audioQueueRef,
+  audioTick,
+  moreAudioComing = false,
   onSpeakingChange,
   onPlaybackError,
   visible = true,
@@ -129,14 +149,43 @@ export function Avatar({
     };
   }, []);
 
+  /** いま鳴らしている最中か（続きを待っている間も true のまま扱う判定に使う）。 */
+  const speakingRef = useRef(false);
+  /** サーバーから「まだ続きが来る」と言われているか。 */
+  const moreComingRef = useRef(moreAudioComing);
+  /**
+   * 受け取ったが、まだ鳴らせる形に変換できていない音声の数。
+   *
+   * ★`tts:done`（サーバーが送り終えた合図）だけでは足りない。届いていても変換の
+   * 途中なら、前の音声を鳴らし終えた時点でいったん空になり、読み上げ終了と
+   * 誤判定する（検証で実際に発生: 1つ目を鳴らし終えた0.5秒後に「終了」を通知し、
+   * 3.5秒後に2つ目が鳴り始めた）。変換待ちの数も見て、両方ゼロで初めて終了とする。
+   */
+  const pendingDecodesRef = useRef(0);
+  /** まだ続きがある＝読み上げ終了を伝えてはいけない状態か。 */
+  const stillExpectingAudio = useCallback(
+    () => moreComingRef.current || pendingDecodesRef.current > 0,
+    [],
+  );
+
+  /** 読み上げが終わったことを親へ伝える（口も閉じる）。二重に伝えない。 */
+  const finishSpeaking = useCallback(() => {
+    if (!speakingRef.current) return;
+    speakingRef.current = false;
+    onSpeakingRef.current?.(false);
+    stopMouth();
+  }, [stopMouth]);
+
   /** Play the next queued segment; called again by each source's `ended`. */
   const playNext = useCallback((ctx: AudioContext) => {
     const buffer = queueRef.current.shift();
     if (!buffer) {
-      // Queue drained — now (and only now) the avatar stops "speaking".
       sourceRef.current = null;
-      onSpeakingRef.current?.(false);
-      stopMouth();
+      // ★続きが来る途中なら、まだ読み上げ終了にしない（口だけ閉じて待つ）。
+      //   次の音声が届いたら、下の取り出し処理がここから再開する。
+      if (stillExpectingAudio()) { stopMouth(); return; }
+      // Queue drained — now (and only now) the avatar stops "speaking".
+      finishSpeaking();
       return;
     }
 
@@ -151,6 +200,7 @@ export function Avatar({
 
     source.onended = () => playNext(ctx);
     sourceRef.current = source;
+    speakingRef.current = true;
     onSpeakingRef.current?.(true);
     source.start();
 
@@ -169,7 +219,14 @@ export function Avatar({
       const next = mouthForLevel(smoothedRms);
       setMouth((prev) => (prev === next ? prev : next));
     }, MOUTH_TICK_MS);
-  }, [stopMouth]);
+  }, [stopMouth, finishSpeaking, stillExpectingAudio]);
+
+  // 「もう続きは来ない」と分かった時点で、既に鳴り終わっていれば読み上げ終了を伝える。
+  // 最後の音声を鳴らし終えたあとに合図が届いた場合を拾うための後始末。
+  useEffect(() => {
+    moreComingRef.current = moreAudioComing;
+    if (!stillExpectingAudio() && !sourceRef.current && queueRef.current.length === 0) finishSpeaking();
+  }, [moreAudioComing, finishSpeaking, stillExpectingAudio]);
 
   // --- Play via Web Audio API (Google TTS base64) ---
   // Google TTS is the only voice — there is deliberately no Web Speech fallback,
@@ -177,7 +234,10 @@ export function Avatar({
   // station-attendant voice. If the audio can't play, the avatar stays silent
   // (the staff's words are still shown as on-screen text).
   useEffect(() => {
-    if (!audioBase64) return;
+    const box = audioQueueRef?.current;
+    if (!box || box.length === 0) return;
+    // 積まれている分をまとめて取り出す。取り出しは同期なので取りこぼさない。
+    const arrived = box.splice(0, box.length);
 
     // Reuse the shared context that was unlocked on the user's tap (see
     // lib/audioUnlock). Creating a fresh context here instead would start it
@@ -189,37 +249,48 @@ export function Avatar({
       return;
     }
 
-    decodeChainRef.current = decodeChainRef.current
-      .then(async () => {
-        // ブラウザは「画面を触るまで音を鳴らさない」ので、止まっていたら動かし直す。
-        if (ctx.state === "suspended") {
-          try { await ctx.resume(); } catch { /* 次の判定で失敗として扱う */ }
-        }
-        // ★resume() が例外を投げずに、止まったままのことがある（許可が下りていない・
-        //   端末側の音声デバイスの問題など）。ここで弾かないと、音が出ないのに
-        //   source.start() まで進み、ended が来ないため **アバターが読み上げ中のまま
-        //   固まり、お客様のマイクが自動で戻らない**。しかも誰にも通知が出ない。
-        //   実機で「お客様側のPCだけ音が鳴らない」事象があり、この経路を塞いだ。
-        if (ctx.state !== "running") {
-          throw new Error(`audio context is ${ctx.state}`);
-        }
+    pendingDecodesRef.current += arrived.length;
+    for (const audioBase64 of arrived) {
+      decodeChainRef.current = decodeChainRef.current
+        .then(async () => {
+          try {
+            // ブラウザは「画面を触るまで音を鳴らさない」ので、止まっていたら動かし直す。
+            if (ctx.state === "suspended") {
+              try { await ctx.resume(); } catch { /* 次の判定で失敗として扱う */ }
+            }
+            // ★resume() が例外を投げずに、止まったままのことがある（許可が下りていない・
+            //   端末側の音声デバイスの問題など）。ここで弾かないと、音が出ないのに
+            //   source.start() まで進み、ended が来ないため **アバターが読み上げ中のまま
+            //   固まり、お客様のマイクが自動で戻らない**。しかも誰にも通知が出ない。
+            //   実機で「お客様側のPCだけ音が鳴らない」事象があり、この経路を塞いだ。
+            if (ctx.state !== "running") {
+              throw new Error(`audio context is ${ctx.state}`);
+            }
 
-        const binary = atob(audioBase64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            const binary = atob(audioBase64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
-        const buffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
-        queueRef.current.push(buffer);
-        // Idle → start playing; otherwise the current source's `ended` chain
-        // picks this segment up in order.
-        if (!sourceRef.current) playNext(ctx);
-      })
-      .catch((e) => {
-        console.error("[avatar] audio decode/playback failed:", e);
-        // 音も文字も届かない状態を防ぐため、親に知らせる（文字表示＋係員への通知）。
-        onPlaybackErrorRef.current?.();
-      });
-  }, [audioBase64, playNext]);
+            const buffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
+            queueRef.current.push(buffer);
+          } finally {
+            // 成否にかかわらず1つ分の「変換待ち」を解消する（数がずれると
+            // 読み上げ終了が伝わらないまま固まる）。
+            pendingDecodesRef.current--;
+          }
+          // Idle → start playing; otherwise the current source's `ended` chain
+          // picks this segment up in order.
+          if (!sourceRef.current) playNext(ctx);
+        })
+        .catch((e) => {
+          console.error("[avatar] audio decode/playback failed:", e);
+          // 音も文字も届かない状態を防ぐため、親に知らせる（文字表示＋係員への通知）。
+          onPlaybackErrorRef.current?.();
+          // 変換に失敗したまま「続きを待っている」状態にしない
+          if (!stillExpectingAudio() && !sourceRef.current && queueRef.current.length === 0) finishSpeaking();
+        });
+    }
+  }, [audioTick, audioQueueRef, playNext, stillExpectingAudio, finishSpeaking]);
 
   if (!visible) return null;
 
