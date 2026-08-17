@@ -30,6 +30,33 @@ const STREAM_RESTART_MS = 4.5 * 60 * 1000;
  * 用語集そのものは後処理・読み照合・訳語固定で引き続き使われる。
  */
 const BOOST = Number(process.env.STT_ADAPTATION_BOOST ?? "0");
+
+/**
+ * 音声認識（chirp_2）に渡す言語コードの読み替え表。
+ *
+ * ★中国語だけは `zh-CN` / `zh-TW` が**拒否される**。実測のエラー:
+ *   `INVALID_ARGUMENT: The language "zh-CN" is not supported by the model
+ *    "chirp_2" in the location named "asia-northeast1"`
+ *   chirp_2 は「話し言葉＋文字体系＋地域」の表記を求めるため、
+ *   簡体は cmn-Hans-CN、繁体は cmn-Hant-TW を使う（受理を実測で確認）。
+ *   他の6言語（ja/en/ko/fr/es/th）は bcp47 のままで通る。
+ *
+ * ★`lib/languages.ts` の bcp47 を書き換えないのは、そちらが
+ *   **Web Speech 版の音声認識**でも使われており、あちらは zh-CN / zh-TW を
+ *   要求するため。読み替えはこの1か所に閉じ込める。
+ *
+ * これを入れるまで、中国語を選んだお客様は**マイクが必ずエラーになり
+ * 一言も届かなかった**（2026-08-17 の中国語テスト開始時に判明。日本語・英語しか
+ * 実機で試していなかったため気づけていなかった）。
+ */
+const STT_LANGUAGE_ALIAS: Record<string, string> = {
+  "zh-CN": "cmn-Hans-CN",
+  "zh-TW": "cmn-Hant-TW",
+};
+function sttLanguageCode(lang: string): string {
+  const code = lang || "ja-JP";
+  return STT_LANGUAGE_ALIAS[code] ?? code;
+}
 // 幻聴対策の第3層: モデル自身の「自信度」が低い確定は破棄する。
 // 無音ゲート（音量）では、ささやき・息・衣擦れのような「続く音」を本物の小声と
 // 区別できない（小声を守るため通すしかない）。その先の見分けは内容側で行う。
@@ -336,7 +363,7 @@ export function registerSttHandlers(
     const useAdaptation = phrases.length > 0 && lang.startsWith("ja") && BOOST > 0;
     const config = {
       explicitDecodingConfig: { encoding: "LINEAR16" as const, sampleRateHertz: 16000, audioChannelCount: 1 },
-      languageCodes: [lang || "ja-JP"],
+      languageCodes: [sttLanguageCode(lang)],
       model: SPEECH_MODEL,
       ...(useAdaptation
         ? { adaptation: { phraseSets: [{ inlinePhraseSet: { phrases: phrases.map((value) => ({ value, boost: BOOST })) } }] } }
