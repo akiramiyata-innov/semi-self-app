@@ -556,8 +556,15 @@ export default function StaffPage() {
     });
 
     // S1: user's connection dropped unexpectedly
-    s.on("call:userDisconnected", (payload: { sessionId: string; machineName: string }) => {
-      addToast(`${payload.machineName}のユーザーとの接続が切れました`, "error");
+    s.on("call:userDisconnected", (payload: { sessionId: string; machineName: string; reason?: string }) => {
+      // same-machine＝同じ端末IDから新しい呼び出しが来たので前の通話を終わらせた場合。
+      // お客様が切ったわけではないので、そのままの文言だと原因を追えない。
+      addToast(
+        payload.reason === "same-machine"
+          ? `${payload.machineName}と同じ端末から新しい呼び出しがあったため、前の通話を終了しました（1台の端末で同時に持てる通話は1件です）`
+          : `${payload.machineName}のユーザーとの接続が切れました`,
+        "error",
+      );
     });
 
     // 未応答タイムアウト: 誰も応答しないまま呼び出しが打ち切られた。着信カードは

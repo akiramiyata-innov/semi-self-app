@@ -925,7 +925,13 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           staffName: staffNameOfSession(old), side: "user",
           detail: "同じ端末から新しい呼び出しが来たため、残っていた前の通話を終了した（通信の瞬断でお客様側が繋ぎ直したときの後片付け）",
         });
-        io.to(old.staffSocketId).emit("call:userDisconnected", { sessionId: oldId, machineName: old.machineName });
+        // ★理由を添える。ここはお客様が切ったのではなく**サーバーが終わらせた**ので、
+        //   「接続が切れました」とだけ伝えると係員が原因を追えない（2026-08-17 の
+        //   2件同時テストで、同じ端末IDの2つのURLを開いてしまい「通話中に別の着信が
+        //   来ると勝手に切れる不具合」に見えた）。
+        io.to(old.staffSocketId).emit("call:userDisconnected", {
+          sessionId: oldId, machineName: old.machineName, reason: "same-machine",
+        });
         io.to(`session:${oldId}`).emit("call:ended", { sessionId: oldId });
         io.to("call-queue").emit("call:ended", { sessionId: oldId });
         saveSessionLog(old).catch((e) => console.error("[log] 幽霊通話の保存に失敗:", e));
