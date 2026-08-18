@@ -1,110 +1,302 @@
 [
   {
-    "id": "1000",
-    "ja": "馬喰横山",
-    "yomi": "ばくろよこやま",
-    "en": "Bakuro-Yokoyama"
-  },
-  {
-    "id": "1001",
-    "ja": "狸穴町",
-    "yomi": "まみあなちょう",
-    "en": "Mamiana-cho"
-  },
-  {
-    "id": "1002",
-    "ja": "舎人",
-    "yomi": "とねり",
-    "en": "Toneri"
-  },
-  {
-    "id": "1003",
+    "id": "1787021337296",
     "ja": "SUICA",
     "yomi": "すいか",
-    "en": "SUICA"
+    "en": "SUICA",
+    "zh": "Suica",
+    "zh-TW": "Suica",
+    "ko": "SUICA",
+    "fr": "SUICA",
+    "es": "SUICA",
+    "th": "SUICA"
   },
   {
-    "id": "1004",
+    "id": "1787021338881",
     "ja": "PASMO",
     "yomi": "ぱすも",
-    "en": "PASMO"
+    "en": "PASMO",
+    "zh": "PASMO",
+    "zh-TW": "PASMO",
+    "ko": "PASMO",
+    "fr": "PASMO",
+    "es": "PASMO",
+    "th": "PASMO"
   },
   {
-    "id": "1005",
-    "ja": "用賀",
-    "yomi": "ようが",
-    "en": "Yoga"
-  },
-  {
-    "id": "1006",
-    "ja": "碑文谷",
-    "yomi": "ひもんや",
-    "en": "Himonya"
-  },
-  {
-    "id": "1007",
-    "ja": "日暮里",
-    "yomi": "にっぽり",
-    "en": "Nippori"
-  },
-  {
-    "id": "1008",
-    "ja": "麻布十番",
-    "yomi": "あざぶじゅうばん",
-    "en": "Azabu-Juban"
-  },
-  {
-    "id": "1009",
-    "ja": "舎人ライナー",
-    "yomi": "とねりらいなー",
-    "en": "Toneri Liner"
-  },
-  {
-    "id": "1010",
+    "id": "1787021340459",
     "ja": "振替輸送",
     "yomi": "ふりかえゆそう",
-    "en": "Substitute transportation"
+    "en": "Substitute transportation",
+    "zh": "替代运输",
+    "zh-TW": "替代運輸",
+    "ko": "대체 輸送 / 대체 교통",
+    "fr": "Transport de substitution",
+    "es": "Transporte alternativo",
+    "th": "การขนส่งทดแทน"
   },
   {
-    "id": "1011",
+    "id": "1787021342046",
     "ja": "乗り越し精算",
     "yomi": "のりこしせいさん",
-    "en": "transfer fare adjustment"
+    "en": "transfer fare adjustment",
+    "zh": "超程补票",
+    "zh-TW": "超程補票",
+    "ko": "환승 정산",
+    "fr": "Ajustement du tarif de correspondance",
+    "es": "Ajuste de tarifa de transbordo",
+    "th": "การปรับค่าโดยสารเปลี่ยนสาย"
   },
   {
-    "id": "1012",
+    "id": "1787021343613",
     "ja": "新宿線",
     "yomi": "しんじゅくせん",
-    "en": "SHINJUKU LINE"
+    "en": "SHINJUKU LINE",
+    "zh": "新宿线",
+    "zh-TW": "新宿線",
+    "ko": "SHINJUKU LINE",
+    "fr": "SHINJUKU LINE",
+    "es": "SHINJUKU LINE",
+    "th": "SHINJUKU LINE"
   },
   {
-    "id": "1013",
-    "ja": "南北線",
-    "yomi": "なんぼくせん",
-    "en": "Namboku Line"
-  },
-  {
-    "id": "1014",
+    "id": "1787021345157",
     "ja": "精算",
     "yomi": "せいさん",
-    "en": "fare adjustment"
+    "en": "fare adjustment",
+    "zh": "补票",
+    "zh-TW": "補票",
+    "ko": "요금 정산",
+    "fr": "Ajustement du tarif",
+    "es": "Ajuste de tarifa",
+    "th": "การปรับค่าโดยสาร"
   },
   {
-    "id": "1015",
+    "id": "1787021346815",
     "ja": "精算機",
     "yomi": "せいさんき",
-    "en": "fare adjustment machine"
+    "en": "fare adjustment machine",
+    "zh": "自动补票机",
+    "zh-TW": "自動補票機",
+    "ko": "정산기",
+    "fr": "Machine d'ajustement de tarif",
+    "es": "Máquina de ajuste de tarifa",
+    "th": "เครื่องปรับค่าโดยสาร"
   },
   {
-    "id": "kounai-chizu-local",
+    "id": "1787021348396",
+    "ja": "馬喰横山",
+    "yomi": "ばくろよこやま",
+    "en": "Bakuro-Yokoyama",
+    "zh": "马喰横山",
+    "zh-TW": "馬喰橫山",
+    "ko": "Bakuro-Yokoyama",
+    "fr": "Bakuro-Yokoyama",
+    "es": "Bakuro-Yokoyama",
+    "th": "Bakuro-Yokoyama"
+  },
+  {
+    "id": "1787021350000",
+    "ja": "狸穴町",
+    "yomi": "まみあなちょう",
+    "en": "Mamiana-cho",
+    "zh": "狸穴町",
+    "zh-TW": "狸穴町",
+    "ko": "Mamiana-cho",
+    "fr": "Mamiana-cho",
+    "es": "Mamiana-cho",
+    "th": "Mamiana-cho"
+  },
+  {
+    "id": "1787021351560",
+    "ja": "舎人",
+    "yomi": "とねり",
+    "en": "Toneri",
+    "zh": "舍人",
+    "zh-TW": "舍人",
+    "ko": "Toneri",
+    "fr": "Toneri",
+    "es": "Toneri",
+    "th": "Toneri"
+  },
+  {
+    "id": "1787021353116",
+    "ja": "用賀",
+    "yomi": "ようが",
+    "en": "Yoga",
+    "zh": "用贺",
+    "zh-TW": "用賀",
+    "ko": "Yoga",
+    "fr": "Yoga",
+    "es": "Yoga",
+    "th": "Yoga"
+  },
+  {
+    "id": "1787021354694",
+    "ja": "碑文谷",
+    "yomi": "ひもんや",
+    "en": "Himonya",
+    "zh": "碑文谷",
+    "zh-TW": "碑文谷",
+    "ko": "Himonya",
+    "fr": "Himonya",
+    "es": "Himonya",
+    "th": "Himonya"
+  },
+  {
+    "id": "1787021356257",
+    "ja": "日暮里",
+    "yomi": "にっぽり",
+    "en": "Nippori",
+    "zh": "日暮里",
+    "zh-TW": "日暮里",
+    "ko": "Nippori",
+    "fr": "Nippori",
+    "es": "Nippori",
+    "th": "Nippori"
+  },
+  {
+    "id": "1787021357833",
+    "ja": "麻布十番",
+    "yomi": "あざぶじゅうばん",
+    "en": "Azabu-Juban",
+    "zh": "麻布十番",
+    "zh-TW": "麻布十番",
+    "ko": "Azabu-Juban",
+    "fr": "Azabu-Juban",
+    "es": "Azabu-Juban",
+    "th": "Azabu-Juban"
+  },
+  {
+    "id": "1787021359514",
+    "ja": "舎人ライナー",
+    "yomi": "とねりらいなー",
+    "en": "Toneri Liner",
+    "zh": "日暮里·舍人线",
+    "zh-TW": "日暮里·舍人線",
+    "ko": "Toneri Liner",
+    "fr": "Toneri Liner",
+    "es": "Toneri Liner",
+    "th": "Toneri Liner"
+  },
+  {
+    "id": "1787021361175",
+    "ja": "南北線",
+    "yomi": "なんぼくせん",
+    "en": "Namboku Line",
+    "zh": "南北线",
+    "zh-TW": "南北線",
+    "ko": "Namboku Line",
+    "fr": "Namboku Line",
+    "es": "Namboku Line",
+    "th": "Namboku Line"
+  },
+  {
+    "id": "1787021362783",
     "ja": "構内地図",
     "yomi": "こうないちず",
     "en": "station map",
-    "zh": "车站地图",
-    "zh-TW": "車站地圖",
+    "zh": "站内地图",
+    "zh-TW": "站內地圖",
     "ko": "역 구내 지도",
     "fr": "plan de la gare",
     "es": "plano de la estación",
     "th": "แผนที่สถานี"
+  },
+  {
+    "id": "1787021364385",
+    "ja": "構内図",
+    "yomi": "こうないず"
+  },
+  {
+    "id": "1787021365942",
+    "ja": "急行",
+    "yomi": "きゅうこう",
+    "zh": "急行列车",
+    "zh-TW": "急行列車"
+  },
+  {
+    "id": "1787021367524",
+    "ja": "各駅停車",
+    "yomi": "かくえきていしゃ",
+    "zh": "各站停车",
+    "zh-TW": "各站停車"
+  },
+  {
+    "id": "1787021369079",
+    "ja": "特急",
+    "yomi": "とっきゅう",
+    "zh": "特急列车",
+    "zh-TW": "特急列車"
+  },
+  {
+    "id": "1787021370645",
+    "ja": "改札口",
+    "yomi": "かいさつぐち",
+    "zh": "检票口",
+    "zh-TW": "驗票口"
+  },
+  {
+    "id": "1787021372194",
+    "ja": "ホーム",
+    "yomi": "ほーむ",
+    "zh": "站台",
+    "zh-TW": "月台"
+  },
+  {
+    "id": "1787021373781",
+    "ja": "エレベーター",
+    "yomi": "えれべーたー",
+    "zh": "电梯",
+    "zh-TW": "電梯"
+  },
+  {
+    "id": "1787021375342",
+    "ja": "乗り換え",
+    "yomi": "のりかえ",
+    "zh": "换乘",
+    "zh-TW": "轉乘"
+  },
+  {
+    "id": "1787021376913",
+    "ja": "チャージ",
+    "yomi": "ちゃーじ",
+    "zh": "充值",
+    "zh-TW": "加值"
+  },
+  {
+    "id": "1787021378482",
+    "ja": "領収書",
+    "yomi": "りょうしゅうしょ",
+    "zh": "收据",
+    "zh-TW": "收據"
+  },
+  {
+    "id": "1787021380047",
+    "ja": "切符",
+    "yomi": "きっぷ",
+    "zh": "车票",
+    "zh-TW": "車票"
+  },
+  {
+    "id": "1787021381598",
+    "ja": "運賃",
+    "yomi": "うんちん",
+    "zh": "票价",
+    "zh-TW": "票價"
+  },
+  {
+    "id": "1787021383155",
+    "ja": "残高",
+    "yomi": "ざんだか",
+    "zh": "余额",
+    "zh-TW": "餘額"
+  },
+  {
+    "id": "1787021384128",
+    "ja": "電車",
+    "yomi": "でんしゃ",
+    "zh": "列车",
+    "zh-TW": "列車"
   }
 ]
