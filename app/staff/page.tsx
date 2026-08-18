@@ -796,6 +796,47 @@ export default function StaffPage() {
     return installClientErrorReporter(() => socketRef.current, "staff");
   }, []);
 
+  /**
+   * お客様音声をONにする。応答時の自動ON（既定ON・2026-08-17 ユーザー決定）と、
+   * ボタンでの再ONの両方から呼ばれる。**クリック操作の中で呼ぶこと**＝ブラウザの
+   * 音の許可（AudioContext の resume）は画面操作の中でしか取れない。
+   * 応答ボタンのクリックがその操作を兼ねる。
+   */
+  const startListenUser = useCallback((sessionId: string) => {
+    const turnOff = () => {
+      socketRef.current?.emit("staff:listenUser", { sessionId, on: false });
+      disposeAudioPlayer(sessionId);
+      updateSession(sessionId, { listenUserAudio: false });
+    };
+    const ctx = getSharedAudioContext();
+    if (!ctx) {
+      addToast("このブラウザでは音声を再生できません。文字起こしでご確認ください。", "error");
+      updateSession(sessionId, { listenUserAudio: false });
+      return;
+    }
+    const player = ensureAudioPlayer(sessionId);
+    socketRef.current?.emit("staff:listenUser", { sessionId, on: true });
+    updateSession(sessionId, { listenUserAudio: true }); // 押した手応えのため先に反映
+    const cannotPlay = () => {
+      addToast(
+        "この画面で音を鳴らせませんでした。タブがミュートになっていないか、音声の出力先と音量をご確認ください。",
+        "error",
+      );
+      turnOff();
+    };
+    void ctx.resume().catch(() => { /* 下の確認で拾う */ }).then(() => {
+      if (ctx.state !== "running") { cannotPlay(); return; }
+      // ★押した直後は running と報告されても音が出ないことがある（検証で実際に遭遇）。
+      //   少し待って「届いているのに1つも鳴らせていない」なら、結果を見て知らせる。
+      setTimeout(() => {
+        // すでにやめている／通話が終わっている場合は何もしない（余計な警告を出さない）
+        if (audioPlayersRef.current.get(sessionId) !== player) return;
+        if (player.blocked) cannotPlay();
+      }, 3000);
+    });
+  }, [updateSession, addToast, ensureAudioPlayer, disposeAudioPlayer]);
+
+
   // ── Actions ───────────────────────────────────────────────────────────────
   const answerCall = useCallback((call: IncomingCall) => {
     socketRef.current?.emit("call:answer", { sessionId: call.sessionId });
@@ -821,9 +862,12 @@ export default function StaffPage() {
       userMicError: null,
       // 応答直後にキオスクが自動ONにして最新状態を送ってくるまでの仮の値
       userMicState: "off",
-      listenUserAudio: false, // 既定はOFF。サーバー側の初期値と合わせる
+      // お客様音声は既定ON（2026-08-17 ユーザー決定）。直後の startListenUser が
+      // サーバーへONを伝える。鳴らせない端末では従来どおり警告してOFFに戻る。
+      listenUserAudio: true,
     }]]));
-  }, [previewFaceFrames]);
+    startListenUser(call.sessionId);
+  }, [previewFaceFrames, startListenUser]);
 
   const rejectCall = useCallback((sessionId: string) => {
     socketRef.current?.emit("call:reject", { sessionId });
@@ -941,39 +985,14 @@ export default function StaffPage() {
   const toggleListenUser = useCallback((sessionId: string) => {
     const session = activeSessions.get(sessionId);
     if (!session) return;
-    const turnOff = () => {
+    if (session.listenUserAudio) {
       socketRef.current?.emit("staff:listenUser", { sessionId, on: false });
       disposeAudioPlayer(sessionId);
       updateSession(sessionId, { listenUserAudio: false });
-    };
-    if (session.listenUserAudio) { turnOff(); return; }
-
-    const ctx = getSharedAudioContext();
-    if (!ctx) {
-      addToast("このブラウザでは音声を再生できません。文字起こしでご確認ください。", "error");
       return;
     }
-    const player = ensureAudioPlayer(sessionId);
-    socketRef.current?.emit("staff:listenUser", { sessionId, on: true });
-    updateSession(sessionId, { listenUserAudio: true }); // 押した手応えのため先に反映
-    const cannotPlay = () => {
-      addToast(
-        "この画面で音を鳴らせませんでした。タブがミュートになっていないか、音声の出力先と音量をご確認ください。",
-        "error",
-      );
-      turnOff();
-    };
-    void ctx.resume().catch(() => { /* 下の確認で拾う */ }).then(() => {
-      if (ctx.state !== "running") { cannotPlay(); return; }
-      // ★押した直後は running と報告されても音が出ないことがある（検証で実際に遭遇）。
-      //   少し待って「届いているのに1つも鳴らせていない」なら、結果を見て知らせる。
-      setTimeout(() => {
-        // すでにやめている／通話が終わっている場合は何もしない（余計な警告を出さない）
-        if (audioPlayersRef.current.get(sessionId) !== player) return;
-        if (player.blocked) cannotPlay();
-      }, 3000);
-    });
-  }, [activeSessions, updateSession, addToast, ensureAudioPlayer, disposeAudioPlayer]);
+    startListenUser(sessionId);
+  }, [activeSessions, updateSession, disposeAudioPlayer, startListenUser]);
 
   /**
    * ★声の回り込み防止：係員自身のマイクが入っている間はお客様の声を鳴らさない。

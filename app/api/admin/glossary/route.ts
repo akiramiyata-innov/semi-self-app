@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
-import { getGlossaryTerms, saveGlossaryTerms, invalidateGlossaryCache } from "@/lib/glossaryClient";
+import { getGlossaryTerms, saveGlossaryTerms, invalidateGlossaryCache, findGlossaryConflict, glossaryConflictMessage } from "@/lib/glossaryClient";
 import type { GlossaryTerm } from "@/lib/types";
 
 export async function GET(req: NextRequest) {
@@ -26,6 +26,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "よみは必須です（ひらがなで入力してください）" }, { status: 400 });
     }
     const terms = await getGlossaryTerms();
+    // 同じ言葉（日本語・外国語とも）の二重登録は拒否する（2026-08-17 ユーザー決定）。
+    // 二重登録は「先に登録した行だけが使われ、後の行は黙って無視される」ため、
+    // 気づかないまま効かない語ができる。運用を単純に保つ目的で一律に止める。
+    const conflict = findGlossaryConflict(terms, body);
+    if (conflict) {
+      return NextResponse.json({ error: glossaryConflictMessage(conflict) }, { status: 400 });
+    }
     const newTerm: GlossaryTerm = {
       id: Date.now().toString(),
       ja: body.ja.trim(),
