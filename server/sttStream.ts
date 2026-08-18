@@ -1,6 +1,10 @@
 import type { Socket } from "socket.io";
 import type { v2 } from "@google-cloud/speech";
 import { getSpeechClient, RECOGNIZER, SPEECH_MODEL } from "../lib/speechClient";
+import {
+  glossaryFieldOf, buildForeignMap, applyForeignCorrection, warmUpPinyin,
+  type ForeignEntry,
+} from "../lib/foreignReading";
 import { getGlossaryTermsFresh } from "../lib/glossaryClient";
 import type { GlossaryTerm } from "../lib/types";
 import { buildReadingMap, applyReadingMatch, warmUpTokenizer, SUFFIX_KANJI, type ReadingEntry } from "../lib/reading";
@@ -30,6 +34,24 @@ const STREAM_RESTART_MS = 4.5 * 60 * 1000;
  * 用語集そのものは後処理・読み照合・訳語固定で引き続き使われる。
  */
 const BOOST = Number(process.env.STT_ADAPTATION_BOOST ?? "0");
+/**
+ * 外国語の後押しの強さ（施策3・2026-08-18）。日本語とは別に持つ。
+ *
+ * ★日本語は後押しを切ったほうが良かった（乗っ取りが増えるため・v1.40.0）が、
+ * **中国語は正反対で、後押しを入れないとほとんど当たらない**。
+ *
+ * 実測（2026-08-18・用語集の中国語表記30語をヒントに、TTS音声＋実マイク相当の
+ * 劣化音声の2条件・登録語を含む文6件と含まない文5件）:
+ *   後押し 0 … 登録語の正解 **0/6**・乗っ取り 0/5
+ *   後押し 5 … 登録語の正解 **4/6**・乗っ取り 0/5
+ *   後押し10 … 4/6・乗っ取り 0/5（5と同結果）
+ *   後押し20 … 4/6・乗っ取り 0/5（5と同結果）
+ * きれいな音声でも劣化音声でも同じ傾向。**日本語で問題になった「乗っ取り」は
+ * 中国語では1件も起きなかった**（登録語を含まない文に登録語が紛れ込まない）。
+ * 5・10・20 が同結果なので、**将来語数が増えたときの乗っ取りの危険がいちばん
+ * 小さい 5 を既定**にする。日本語は従来どおり 0（上の BOOST）。
+ */
+const BOOST_FOREIGN = Number(process.env.STT_ADAPTATION_BOOST_FOREIGN ?? "5");
 
 /**
  * 音声認識（chirp_2）に渡す言語コードの読み替え表。
@@ -286,6 +308,10 @@ export function registerSttHandlers(
   let corrections: Correction[] = [];
   let caseRules: CaseRule[] = [];
   let readingMap: ReadingEntry[] = [];
+  /** 外国語の用語照合表（施策2）。日本語の通話では空のまま。 */
+  let foreignMap: ForeignEntry[] = [];
+  /** この通話の言語が使う用語集の欄（日本語なら null）。 */
+  let glossaryField: ReturnType<typeof glossaryFieldOf> = null;
   let running = false;
   let consecutiveErrors = 0;
   // 通話終了時の拾い上げ（flushPendingFinal）中だけ、確定テキストをここへも回収する
@@ -360,13 +386,15 @@ export function registerSttHandlers(
     // Japanese recognition (they would not help — and could hurt — other langs).
     // BOOST=0 は「ヒントを送らない」＝モデルへの後押しを完全に切る（かな→漢字の
     // 後処理・読み照合は用語集から作られるので、そのまま効き続ける）。
-    const useAdaptation = phrases.length > 0 && lang.startsWith("ja") && BOOST > 0;
+    // 後押しの強さは言語ごとに持つ（日本語は乗っ取りのため0・外国語は実測で決める）
+    const boost = glossaryField ? BOOST_FOREIGN : BOOST;
+    const useAdaptation = phrases.length > 0 && boost > 0;
     const config = {
       explicitDecodingConfig: { encoding: "LINEAR16" as const, sampleRateHertz: 16000, audioChannelCount: 1 },
       languageCodes: [sttLanguageCode(lang)],
       model: SPEECH_MODEL,
       ...(useAdaptation
-        ? { adaptation: { phraseSets: [{ inlinePhraseSet: { phrases: phrases.map((value) => ({ value, boost: BOOST })) } }] } }
+        ? { adaptation: { phraseSets: [{ inlinePhraseSet: { phrases: phrases.map((value) => ({ value, boost })) } }] } }
         : {}),
     };
     // V2 streaming needs the recognizer in the routing header (x-goog-request-params);
@@ -430,8 +458,11 @@ export function registerSttHandlers(
           onInterim?.("");  // 表示済みの途中経過を消す（確定は破棄したため）
           return;
         }
-        // 確定時のみ、読み照合（kuromoji）で同音の別漢字も矯正する。
-        const transcript = await applyReadingMatch(base, readingMap);
+        // 確定時のみ、同音の別表記を用語集の登録どおりに矯正する。
+        // 日本語は読み照合（kuromoji）、外国語は発音・表記の照合（施策2）。
+        const transcript = glossaryField
+          ? await applyForeignCorrection(base, glossaryField, foreignMap)
+          : await applyReadingMatch(base, readingMap);
         // ── 診断ログ（用語集語の誤挿入調査＋各ガードのしきい値調整）─────────
         // 生の認識結果(raw)→かな漢字補正(corrected)→読み照合(final)を段階で記録。
         // 話していない登録語が混入した場合、それが raw の時点で入っているか（＝モデル側か
@@ -552,11 +583,20 @@ export function registerSttHandlers(
     voiceRun = 0;
     pendingAudio = [];
     const terms = await getGlossaryTermsFresh().catch(() => [] as GlossaryTerm[]);
-    phrases = terms.map((t) => t.ja).filter(Boolean);
+    glossaryField = glossaryFieldOf(lang);
+    // 認識へのヒント（施策3）は**その言語の表記**を渡す。日本語の通話には日本語欄、
+    // 中国語の通話には中国語欄。従来は言語に関わらず日本語欄を渡していた。
+    phrases = (glossaryField
+      ? terms.map((t) => (t[glossaryField!] as string | undefined) ?? "")
+      : terms.map((t) => t.ja)
+    ).filter(Boolean);
     corrections = buildCorrections(terms);
     caseRules = buildCaseRules(terms);
     readingMap = buildReadingMap(terms);
-    warmUpTokenizer(); // 辞書ロードを先行させ、初回の確定までに準備を整える
+    // 外国語は発音・表記での照合表を用意する（施策2）
+    foreignMap = glossaryField ? await buildForeignMap(terms, glossaryField).catch(() => []) : [];
+    if (glossaryField) warmUpPinyin();
+    else warmUpTokenizer(); // 辞書ロードを先行させ、初回の確定までに準備を整える
     await openStream();
     scheduleRestart();
   });
