@@ -1,0 +1,412 @@
+[
+  {
+    "id": "01",
+    "title": "きっぷの買い方",
+    "turns": [
+      {
+        "userText": "Excusez-moi, comment puis-je acheter un billet pour Nippori ?",
+        "intentJa": "すみません、日暮里までのきっぷはどうやって買えばいいですか。",
+        "staffJa": "はい、ご案内します。画面の左上にある「きっぷを買う」を押してください。",
+        "check": {
+          "term": "日暮里",
+          "inGlossary": true
+        }
+      },
+      {
+        "userText": "J'ai appuyé. Que dois-je faire ensuite ?",
+        "intentJa": "押しました。次はどうすればいいですか。",
+        "staffJa": "運賃が表示されますので、日暮里の二百二十円を選んでください。"
+      },
+      {
+        "userText": "Puis-je payer en espèces, ou seulement avec Suica ?",
+        "intentJa": "現金でも払えますか。それともスイカだけですか。",
+        "staffJa": "どちらでも大丈夫です。現金の場合は右の投入口にお入れください。"
+      },
+      {
+        "userText": "Je comprends. Merci beaucoup.",
+        "intentJa": "わかりました。ありがとうございます。",
+        "staffJa": "お気をつけて行ってらっしゃいませ。"
+      }
+    ]
+  },
+  {
+    "id": "02",
+    "title": "乗り換えの案内",
+    "turns": [
+      {
+        "userText": "Je voudrais changer de train à Bakuro-Yokoyama. Quel quai dois-je prendre ?",
+        "intentJa": "馬喰横山で乗り換えたいのですが、どのホームですか。",
+        "staffJa": "馬喰横山では、地下二階の三番ホームにお進みください。",
+        "check": {
+          "term": "馬喰横山",
+          "inGlossary": true
+        }
+      },
+      {
+        "userText": "Combien de minutes faut-il de là jusqu'à Jimbocho ?",
+        "intentJa": "そこから神保町までは何分くらいかかりますか。",
+        "staffJa": "神保町までは、およそ八分でございます。",
+        "check": {
+          "term": "神保町",
+          "inGlossary": false
+        }
+      },
+      {
+        "userText": "Est-ce que l'express s'arrête ici ?",
+        "intentJa": "急行は止まりますか。",
+        "staffJa": "はい、急行も停車いたします。"
+      },
+      {
+        "userText": "Cela m'a beaucoup aidé. Merci.",
+        "intentJa": "助かりました。ありがとうございました。",
+        "staffJa": "どういたしまして。お気をつけてお越しください。"
+      }
+    ]
+  },
+  {
+    "id": "03",
+    "title": "駅名の聞き取り比べ（用語集あり／なし）",
+    "note": "同じ文型で駅名だけを入れ替え、用語集に登録がある駅とない駅で結果を比べる。用語集は一切変更しない。",
+    "turns": [
+      {
+        "userText": "Excusez-moi, comment aller à Nippori ?",
+        "intentJa": "すみません、日暮里までの行き方を教えてください。",
+        "said": "Nippori",
+        "check": {
+          "term": "日暮里",
+          "inGlossary": true
+        },
+        "staffJa": "はい、新宿線で馬喰横山まで行き、そこで乗り換えてください。"
+      },
+      {
+        "userText": "Excusez-moi, comment aller à Akebonobashi ?",
+        "intentJa": "すみません、曙橋までの行き方を教えてください。",
+        "said": "Akebonobashi",
+        "check": {
+          "term": "曙橋",
+          "inGlossary": false
+        },
+        "staffJa": "はい、新宿線でそのまま三つ目の駅でございます。"
+      },
+      {
+        "userText": "Excusez-moi, comment aller à Bakuro-Yokoyama ?",
+        "intentJa": "すみません、馬喰横山までの行き方を教えてください。",
+        "said": "Bakuro-Yokoyama",
+        "check": {
+          "term": "馬喰横山",
+          "inGlossary": true
+        },
+        "staffJa": "はい、この電車でそのまま行けます。所要時間は十分ほどです。"
+      },
+      {
+        "userText": "Excusez-moi, comment aller à Iwamotocho ?",
+        "intentJa": "すみません、岩本町までの行き方を教えてください。",
+        "said": "Iwamotocho",
+        "check": {
+          "term": "岩本町",
+          "inGlossary": false
+        },
+        "staffJa": "はい、こちらも新宿線でそのまま行けます。四つ目の駅です。"
+      },
+      {
+        "userText": "Je voudrais descendre à Yoga. Quelle sortie est la plus proche ?",
+        "intentJa": "用賀で降りたいのですが、何番出口が近いですか。",
+        "said": "Yoga",
+        "check": {
+          "term": "用賀",
+          "inGlossary": true
+        },
+        "staffJa": "二番出口が最も近くなっております。"
+      },
+      {
+        "userText": "Je voudrais descendre à Ogawamachi. Quelle sortie est la plus proche ?",
+        "intentJa": "小川町で降りたいのですが、何番出口が近いですか。",
+        "said": "Ogawamachi",
+        "check": {
+          "term": "小川町",
+          "inGlossary": false
+        },
+        "staffJa": "こちらは三番出口が近くなっております。"
+      },
+      {
+        "userText": "Je voudrais descendre à Himonya. Quelle sortie est la plus proche ?",
+        "intentJa": "碑文谷で降りたいのですが、何番出口が近いですか。",
+        "said": "Himonya",
+        "check": {
+          "term": "碑文谷",
+          "inGlossary": true
+        },
+        "staffJa": "一番出口をご利用ください。"
+      },
+      {
+        "userText": "Je voudrais descendre à Hamacho. Quelle sortie est la plus proche ?",
+        "intentJa": "浜町で降りたいのですが、何番出口が近いですか。",
+        "said": "Hamacho",
+        "check": {
+          "term": "浜町",
+          "inGlossary": false
+        },
+        "staffJa": "浜町でしたら、四番出口が近くなっております。"
+      }
+    ]
+  },
+  {
+    "id": "04",
+    "title": "鉄道用語の聞き取り比べ",
+    "note": "用語集の残り25語を一通り言わせる。欄が空の言語（英・仏・西の鉄道用語）は登録なしとして数え、その差も測る。",
+    "turns": [
+      {
+        "userText": "Je dois faire un Ajustement du tarif de correspondance. Où se trouve le Machine d'ajustement de tarif ?",
+        "intentJa": "乗り越し精算をしたいのですが、精算機はどこにありますか。",
+        "staffJa": "精算機は改札の手前、左側にございます。",
+        "checks": [
+          {
+            "term": "乗り越し精算",
+            "inGlossary": true,
+            "said": "Ajustement du tarif de correspondance"
+          },
+          {
+            "term": "精算機",
+            "inGlossary": true,
+            "said": "Machine d'ajustement de tarif"
+          }
+        ]
+      },
+      {
+        "userText": "J'ai perdu mon billet. Que dois-je faire pour le Ajustement du tarif ?",
+        "intentJa": "切符をなくしてしまいました。精算はどうすればいいですか。",
+        "staffJa": "切符をなくされた場合は、精算所で再度お支払いいただきます。",
+        "checks": [
+          {
+            "term": "切符",
+            "inGlossary": false,
+            "said": "billet"
+          },
+          {
+            "term": "精算",
+            "inGlossary": true,
+            "said": "Ajustement du tarif"
+          }
+        ]
+      },
+      {
+        "userText": "Je veux faire une recharge sur ma carte PASMO. Où puis-je voir le solde ?",
+        "intentJa": "PASMOにチャージしたいのですが、残高はどこで見られますか。",
+        "staffJa": "チャージは券売機でできます。残高は画面の右上に表示されます。",
+        "checks": [
+          {
+            "term": "PASMO",
+            "inGlossary": true,
+            "said": "PASMO"
+          },
+          {
+            "term": "チャージ",
+            "inGlossary": false,
+            "said": "recharge"
+          },
+          {
+            "term": "残高",
+            "inGlossary": false,
+            "said": "solde"
+          }
+        ]
+      },
+      {
+        "userText": "Je voudrais un reçu. Combien était le tarif ?",
+        "intentJa": "領収書がほしいのですが、運賃はいくらでしたか。",
+        "staffJa": "領収書は精算機から出せます。運賃は二百二十円でした。",
+        "checks": [
+          {
+            "term": "領収書",
+            "inGlossary": false,
+            "said": "reçu"
+          },
+          {
+            "term": "運賃",
+            "inGlossary": false,
+            "said": "tarif"
+          }
+        ]
+      },
+      {
+        "userText": "Où est le portillon ? Puis-je aussi utiliser l'ascenseur ?",
+        "intentJa": "改札口はどちらですか。エレベーターも使えますか。",
+        "staffJa": "改札口は突き当たりを右です。エレベーターもご利用いただけます。",
+        "checks": [
+          {
+            "term": "改札口",
+            "inGlossary": false,
+            "said": "portillon"
+          },
+          {
+            "term": "エレベーター",
+            "inGlossary": false,
+            "said": "ascenseur"
+          }
+        ]
+      },
+      {
+        "userText": "Lequel est plus rapide, le train omnibus ou le train express ?",
+        "intentJa": "各駅停車と特急では、どちらが早く着きますか。",
+        "staffJa": "特急のほうが五分早く着きます。",
+        "checks": [
+          {
+            "term": "各駅停車",
+            "inGlossary": false,
+            "said": "train omnibus"
+          },
+          {
+            "term": "特急",
+            "inGlossary": false,
+            "said": "train express"
+          }
+        ]
+      },
+      {
+        "userText": "Pour la correspondance de la SHINJUKU LINE à la Namboku Line, quel quai dois-je prendre ?",
+        "intentJa": "新宿線から南北線への乗り換えは、どのホームですか。",
+        "staffJa": "新宿線から南北線へは、地下三階の二番ホームです。",
+        "checks": [
+          {
+            "term": "新宿線",
+            "inGlossary": true,
+            "said": "SHINJUKU LINE"
+          },
+          {
+            "term": "南北線",
+            "inGlossary": true,
+            "said": "Namboku Line"
+          },
+          {
+            "term": "乗り換え",
+            "inGlossary": false,
+            "said": "correspondance"
+          },
+          {
+            "term": "ホーム",
+            "inGlossary": false,
+            "said": "quai"
+          }
+        ]
+      },
+      {
+        "userText": "Je veux aller à Toneri par le Toneri Liner. Tous les combien passe le train ?",
+        "intentJa": "舎人ライナーで舎人まで行きたいのですが、電車は何分おきですか。",
+        "staffJa": "舎人ライナーは五分おきに出ております。",
+        "checks": [
+          {
+            "term": "舎人ライナー",
+            "inGlossary": true,
+            "said": "Toneri Liner"
+          },
+          {
+            "term": "舎人",
+            "inGlossary": true,
+            "said": "Toneri"
+          },
+          {
+            "term": "電車",
+            "inGlossary": false,
+            "said": "train"
+          }
+        ]
+      },
+      {
+        "userText": "Avez-vous un plan de la gare d'Azabu-Juban ? Je veux aussi aller à Mamiana-cho.",
+        "intentJa": "麻布十番の構内図はありますか。狸穴町にも行きたいです。",
+        "staffJa": "麻布十番の構内図はこちらでお渡しできます。狸穴町へは徒歩十分です。",
+        "checks": [
+          {
+            "term": "麻布十番",
+            "inGlossary": true,
+            "said": "Azabu-Juban"
+          },
+          {
+            "term": "構内図",
+            "inGlossary": false,
+            "said": "plan de la gare"
+          },
+          {
+            "term": "狸穴町",
+            "inGlossary": true,
+            "said": "Mamiana-cho"
+          }
+        ]
+      },
+      {
+        "userText": "Y a-t-il un Transport de substitution en cas d'accident ? Puis-je aussi avoir un plan de la gare ?",
+        "intentJa": "事故のときは振替輸送がありますか。構内地図もいただけますか。",
+        "staffJa": "事故の際は振替輸送をご利用いただけます。構内地図もお渡しします。",
+        "checks": [
+          {
+            "term": "振替輸送",
+            "inGlossary": true,
+            "said": "Transport de substitution"
+          },
+          {
+            "term": "構内地図",
+            "inGlossary": true,
+            "said": "plan de la gare"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "06",
+    "title": "長い案内（先行再生の確認）",
+    "note": "係員がわざと長い案内を返す。文の区切りごとに先行して読み上げる仕組みが働くかと、その効果を測る。",
+    "turns": [
+      {
+        "userText": "Je me suis perdu dans la gare. Pouvez-vous m'expliquer en détail comment aller du portillon au quai ?",
+        "intentJa": "駅の構内で迷ってしまいました。改札からホームまでの行き方を詳しく教えてください。",
+        "staffJa": "承知しました。まず改札を出ずに、そのまま正面の通路をまっすぐお進みください。突き当たりに案内板がございますので、そこを右に曲がってください。少し進むとエスカレーターが二基ございます。左側が上り、右側が下りでございます。左側の上りエスカレーターで二階へお上がりください。上がりましたら、右手に三番ホームへの階段が見えてまいります。そちらを降りていただくと、ホームに到着いたします。全部で五分ほどでございます。"
+      },
+      {
+        "userText": "Merci. Pouvez-vous me redire l'ordre encore une fois ?",
+        "intentJa": "ありがとうございます。もう一度、順番に教えていただけますか。",
+        "staffJa": "はい、順番に申し上げます。一つ目、正面の通路をまっすぐ進みます。二つ目、突き当たりの案内板を右に曲がります。三つ目、左側の上りエスカレーターで二階へ上がります。四つ目、右手の階段を降りて三番ホームへ向かいます。以上の四つでございます。ご不明な点がございましたら、いつでもお声がけください。"
+      }
+    ]
+  },
+  {
+    "id": "05",
+    "title": "耐久（5分連続・マイクを切らない）",
+    "note": "マイクを一度も切らずに5分以上話し続ける。約4.5分ごとの音声認識ストリーム張り替えをまたぐため、そこで言葉が落ちないかを見る。係員は相槌を打たない。",
+    "endurance": true,
+    "turns": [
+      {
+        "parts": [
+          "Excusez-moi, comment puis-je acheter un billet pour Nippori ?",
+          "J'ai appuyé. Que dois-je faire ensuite ?",
+          "Puis-je payer en espèces, ou seulement avec Suica ?",
+          "Je comprends. Merci beaucoup.",
+          "Je voudrais changer de train à Bakuro-Yokoyama. Quel quai dois-je prendre ?",
+          "Combien de minutes faut-il de là jusqu'à Jimbocho ?",
+          "Est-ce que l'express s'arrête ici ?",
+          "Cela m'a beaucoup aidé. Merci.",
+          "Excusez-moi, comment aller à Nippori ?",
+          "Excusez-moi, comment aller à Akebonobashi ?",
+          "Excusez-moi, comment aller à Bakuro-Yokoyama ?",
+          "Excusez-moi, comment aller à Iwamotocho ?",
+          "Je voudrais descendre à Yoga. Quelle sortie est la plus proche ?",
+          "Je voudrais descendre à Ogawamachi. Quelle sortie est la plus proche ?",
+          "Je voudrais descendre à Himonya. Quelle sortie est la plus proche ?",
+          "Je voudrais descendre à Hamacho. Quelle sortie est la plus proche ?",
+          "Je dois faire un Ajustement du tarif de correspondance. Où se trouve le Machine d'ajustement de tarif ?",
+          "J'ai perdu mon billet. Que dois-je faire pour le Ajustement du tarif ?",
+          "Je veux faire une recharge sur ma carte PASMO. Où puis-je voir le solde ?",
+          "Je voudrais un reçu. Combien était le tarif ?",
+          "Où est le portillon ? Puis-je aussi utiliser l'ascenseur ?",
+          "Lequel est plus rapide, le train omnibus ou le train express ?",
+          "Pour la correspondance de la SHINJUKU LINE à la Namboku Line, quel quai dois-je prendre ?",
+          "Je veux aller à Toneri par le Toneri Liner. Tous les combien passe le train ?",
+          "Avez-vous un plan de la gare d'Azabu-Juban ? Je veux aussi aller à Mamiana-cho.",
+          "Y a-t-il un Transport de substitution en cas d'accident ? Puis-je aussi avoir un plan de la gare ?"
+        ],
+        "repeatToSeconds": 330,
+        "staffJa": null
+      }
+    ]
+  }
+]

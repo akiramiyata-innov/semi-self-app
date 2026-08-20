@@ -1316,16 +1316,21 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           });
         };
 
+        /**
+         * ★文字は「翻訳が終わった時点」で送る（対策10・2026-08-20）。
+         *
+         * 以前は1つ目の音声ができるのを待ってから送っていたため、音声合成の時間ぶん
+         * お客様が読み始めるのが遅れていた（実測で約0.8〜1.2秒）。翻訳さえ終われば
+         * 文字は出せるので、合成を待つ理由がない。
+         * 「文字が音声より先に届く」という元の決まりは保たれる（むしろ差が広がる）。
+         */
+        sendUserText(false);
         const tts = await synthesizeAndStream(speakText, userLang, (audio, index) => {
           if (index === 0) {
-            sendUserText(false);
             metrics.noteTtsSent(sessionId); // 測定は「1文目が出せた時刻」＝実際に声が始まる時刻
           }
           io.to(session.userSocketId).emit("tts:audio", { sessionId, audioBase64: audio, lang: userLang });
         });
-        // 1つも作れなかった＝音声ゼロ。テキスト非表示の設定でもこの1件だけは文字を出す
-        // （音声も文字も無い＝お客様に何も届かない状態を防ぐ）。
-        sendUserText(true);
         // ★「この返答の音声はこれで全部」の合図。
         //   文ごとに送るようになったため、キオスクは1つ目を鳴らし終えた時点では
         //   まだ続きが来るのかどうか分からない。これが無いと、2つ目が間に合わなかった
@@ -1346,9 +1351,12 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         // 言い直せるように知らせる。partial=途中が抜けた音声が再生された場合。
         if (!tts.ok) {
           const partial = tts.sent > 0;
-          // 途中が抜けた音声のときは、お客様の画面にも文字を出す。文字は音声より先に
+          // 音声が欠けたときは、お客様の画面にも文字を出す。文字は音声より先に
           // 送ってしまっているので、あとから「この発言は文字も出して」と伝える。
-          if (partial) io.to(session.userSocketId).emit("tts:incomplete", { sessionId });
+          // ★音声がゼロの場合も送る（以前は partial のときだけで、音声ゼロのときは
+          //   sendUserText(true) に頼っていた。文字を先に送るようにしたことで
+          //   その経路が働かなくなるため、ここで必ず知らせる）。
+          io.to(session.userSocketId).emit("tts:incomplete", { sessionId, partial });
           io.to(session.staffSocketId).emit("error:tts", { sessionId, partial, reason: "synthesis" });
           console.error(`[tts] 音声を届けられなかった session=${sessionId} partial=${partial} ${tts.sent}/${tts.total}`);
           recordAppError({ type: "tts-synthesis", sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), side: "staff", detail: `${partial ? "一部の" : ""}音声を合成できず文字のみ表示: ${text.slice(0, 60)}` });

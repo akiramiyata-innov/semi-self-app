@@ -54,6 +54,16 @@ const BOOST = Number(process.env.STT_ADAPTATION_BOOST ?? "0");
 const BOOST_FOREIGN = Number(process.env.STT_ADAPTATION_BOOST_FOREIGN ?? "5");
 
 /**
+ * 「話し終わった」と判定するまでの無音の長さ（ミリ秒）。0＝指定せず Google の既定に任せる。
+ *
+ * ★話し終えてから文字が確定するまでの待ち時間は、実測で約1.4〜1.6秒（2026-08-19 本番）。
+ *   その大半がこの判定待ちで、1往復に2回（係員側とお客様側）効いてくる。
+ * ★短くすると速くなるが、間を取って話す人の言葉が途中で切られる。
+ *   速さと切れやすさの両方を実測してから決めること。既定は現状維持（0＝指定しない）。
+ */
+const SPEECH_END_TIMEOUT_MS = Number(process.env.STT_SPEECH_END_TIMEOUT_MS ?? "0");
+
+/**
  * 音声認識（chirp_2）に渡す言語コードの読み替え表。
  *
  * ★中国語だけは `zh-CN` / `zh-TW` が**拒否される**。実測のエラー:
@@ -495,7 +505,19 @@ export function registerSttHandlers(
       }
     });
     // First message: recognizer + streaming config. Subsequent writes are audio.
-    s.write({ recognizer: RECOGNIZER, streamingConfig: { config, streamingFeatures: { interimResults: true } } });
+    const streamingFeatures: Record<string, unknown> = { interimResults: true };
+    if (SPEECH_END_TIMEOUT_MS > 0) {
+      // 発話の切れ目を自前で決める。enableVoiceActivityEvents を立てないと
+      // voiceActivityTimeout は効かない（Google STT V2 の仕様）。
+      streamingFeatures.enableVoiceActivityEvents = true;
+      streamingFeatures.voiceActivityTimeout = {
+        speechEndTimeout: {
+          seconds: Math.floor(SPEECH_END_TIMEOUT_MS / 1000),
+          nanos: (SPEECH_END_TIMEOUT_MS % 1000) * 1_000_000,
+        },
+      };
+    }
+    s.write({ recognizer: RECOGNIZER, streamingConfig: { config, streamingFeatures } });
     stream = s;
     // 開くまでに届いていた音声を、届いた順に流し込む（話し出しの欠けを防ぐ）。
     if (pendingAudio.length) {

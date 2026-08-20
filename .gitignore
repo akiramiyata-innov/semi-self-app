@@ -49,3 +49,7 @@ next-env.d.ts
 
 # Claude Code のローカル設定（開発用サーバーの起動定義）
 /.claude
+
+# 自動シナリオテストの音声と結果（大きいうえ、作り直せるもの）
+scripts/test-agent/audio/
+scripts/test-agent/out/

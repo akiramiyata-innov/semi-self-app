@@ -807,6 +807,25 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       setTextVisible(!!payload.visible);
     });
 
+    /**
+     * 音声が届かなかった／途中で欠けたときの知らせ（対策10・2026-08-20）。
+     *
+     * 文字は音声より先に送られてくるため、送った時点では音声が出せるかどうか
+     * まだ分からない。あとから「この発言は文字も出して」と伝えられる。
+     * ★以前はサーバーが送っていたのに受け取る側が無く、機能していなかった。
+     */
+    s.on("tts:incomplete", () => {
+      const id = lastStaffEntryIdRef.current;
+      if (!id) return;
+      setForcedTextIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+      // 音声は来ない（または途中で終わる）ので、読み上げ待ちの状態を解く
+      speechPendingRef.current = false;
+      setMoreAudioComing(false);
+      setMicMuted(false);
+      const pending = pendingEndRef.current;
+      if (pending) { pendingEndRef.current = null; setTimeout(pending, NO_AUDIO_GRACE_MS); }
+    });
+
     s.on("speech:staff", (payload: { text: string; isFinal: boolean; forceShowText?: boolean }) => {
       setStaffComposing(false); // 返事が来た（途中表示でも）＝準備中の表示は不要
       composingSynthesizingRef.current = false;
