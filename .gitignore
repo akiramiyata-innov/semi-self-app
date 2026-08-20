@@ -53,3 +53,6 @@ next-env.d.ts
 # 自動シナリオテストの音声と結果（大きいうえ、作り直せるもの）
 scripts/test-agent/audio/
 scripts/test-agent/out/
+
+# 窓処サーバへの通知の確認記録（実行のたびに増える作業ファイル）
+scripts/kiosk-notify/received.log

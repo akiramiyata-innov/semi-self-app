@@ -13,6 +13,8 @@ import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import type { MicErrorCode } from "@/hooks/useSpeechRecognition";
 import { useScreenCapture } from "@/hooks/useScreenCapture";
 import { installClientErrorReporter } from "@/lib/clientErrorReporter";
+import { notifyCallEnded } from "@/lib/kioskNotify";
+import type { CallEndStatus } from "@/lib/kioskNotify";
 import type { TranscriptEntry } from "@/lib/types";
 import type { LangCode } from "@/lib/socketEvents";
 
@@ -270,6 +272,31 @@ const MIC_BUTTON_ON = {
   background: "linear-gradient(180deg, #fde7f0 0%, #f4a6c6 100%)",
 } as const;
 
+/**
+ * 通話の終わり方と、窓処サーバへ知らせる status の対応（2026-08-20）。
+ * ここに載っている phase になったら1回だけ通知する。**終了経路が増えても
+ * 送り忘れないよう、送信は1か所（下の useEffect）だけにしてある。**
+ *
+ * `from` は「その終わり方があり得る直前の画面」。ここを見るのは、
+ * **前の通話の終了の合図が、次の呼び出しの最中に届くことがある**ため
+ * （同じ端末から呼び直すと、サーバーが前の通話を終わらせて call:ended を送る＝
+ * socketServer.ts の「同じ端末からの再呼び出し」）。そのまま通知すると、
+ * 通話が始まった直後に窓処端末が待機画面へ戻ってしまう。
+ * 「通話終了」は通話中(in-call)からしか起こらないので、それで見分けられる。
+ */
+const END_STATUS: Partial<Record<Phase, { status: CallEndStatus; from: Phase[] }>> = {
+  // どちらかが「通話終了」を押した（通話中からしか起こらない）
+  "ended": { status: "ended", from: ["in-call"] },
+  // 係員が断った／応答できる係員がいなかった／誰も応答しないまま打ち切り（呼び出し中）
+  "rejected": { status: "rejected", from: ["calling"] },
+  "no-staff": { status: "no-staff", from: ["calling"] },
+  "call-timeout": { status: "call-timeout", from: ["calling"] },
+  // 通話中に係員の接続が切れた
+  "staff-disconnected": { status: "staff-disconnected", from: ["in-call"] },
+  // お客様側（窓処端末）の通信が切れた。呼び出し中でも通話中でも起こる
+  "disconnected": { status: "user-offline", from: ["calling", "in-call"] },
+};
+
 interface UserScreenProps {
   machineId: string;
   machineName: string;
@@ -277,9 +304,11 @@ interface UserScreenProps {
   line?: string;
   stationName?: string;
   stationCode?: string;
+  /** 窓処サーバの宛先。page.tsx で端末自身かどうかを確かめてある。 */
+  notifyUrl?: string;
 }
 
-export function UserScreen({ machineId, machineName, stationId = "", line, stationName, stationCode }: UserScreenProps) {
+export function UserScreen({ machineId, machineName, stationId = "", line, stationName, stationCode, notifyUrl }: UserScreenProps) {
   const socketRef = useRef<Socket | null>(null);
   const [connected, setConnected] = useState(false);
   const [phase, setPhase] = useState<Phase>("lang-select");
@@ -643,6 +672,31 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       window.removeEventListener("online", handleOnline);
     };
   }, []);
+
+  /**
+   * 窓処サーバへ「通話が終わった」ことを知らせる（2026-08-20）。
+   *
+   * 終わり方は7種類あるが、**窓処側は type しか見ない**ため、すべて
+   * type=CALL_ENDED で送り、どの終わり方だったかは status に入れる。
+   *
+   * 終了経路ごとに書くと増えたときに送り忘れるので、**画面の状態（phase）が
+   * 終了を表す値になった瞬間に1回だけ送る**方式にしてある。
+   * 「通話終了」を押したときは、アバターの読み上げが終わってから phase が
+   * "ended" になる。**読み上げの途中で窓処端末の画面が待機に戻らない**ため、
+   * この方式のほうが都合がよい。
+   */
+  const prevPhaseRef = useRef<Phase>(phase);
+  const lastSessionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (sessionId) lastSessionIdRef.current = sessionId;   // 終了時には消えていることがある
+  }, [sessionId]);
+  useEffect(() => {
+    const prev = prevPhaseRef.current;
+    prevPhaseRef.current = phase;
+    const end = END_STATUS[phase];
+    if (!end || !end.from.includes(prev)) return;
+    notifyCallEnded({ base: notifyUrl, status: end.status, machineId, sessionId: lastSessionIdRef.current });
+  }, [phase, notifyUrl, machineId]);
 
   // 画面のプログラムエラーをサーバーの障害履歴へ申告する（提案②）。
   // 導入後の窓処端末は直接調べられないため、端末側で起きたことを残す唯一の経路。
