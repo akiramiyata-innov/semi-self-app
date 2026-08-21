@@ -31,6 +31,11 @@ try {
   for (let i = 0; i < 130 && !blinked; i++) { await sleep(60); blinked = await page.js(`!!document.querySelector('[data-blink="1"]')`); }
   c.check("アバターが瞬きする（8秒以内に目を閉じる瞬間がある）", blinked, "");
   c.check("アバターの目（開・閉）と土台の画像が読み込まれている", await page.js(`[...document.querySelectorAll('img[src*="/avatar/"]')].filter(i=>/base|eye-open|eye-close/.test(i.src)).every(i=>i.complete && i.naturalWidth>0)`), "");
+  // 上半身のゆれ（v1.57.0）: ゆれの要素に animation が効いていて、時間がたつと transform が変わる
+  const swayInfo = () => page.js(`(()=>{const el=document.querySelector('[data-sway="1"]');if(!el)return null;const cs=getComputedStyle(el);return {name:cs.animationName,transform:cs.transform}})()`);
+  const s1 = await swayInfo(); await sleep(1300); const s2 = await swayInfo();
+  c.check("上半身のゆれのアニメーションが効いている", !!s1 && /avatar-sway/.test(s1.name), JSON.stringify(s1));
+  c.check("ゆれで位置が実際に変わっている（1.3秒後に transform が違う）", !!s1 && !!s2 && s1.transform !== s2.transform, `${s1?.transform} → ${s2?.transform}`);
 
   // ① 3分割の返答（S5の形）。#1と#2はほぼ同時、#3は約4秒後
   const micButtonText = () => page.js(`[...document.querySelectorAll('button')].map(b=>b.textContent).find(t=>/Mic (ON|OFF|paused)/.test(t)) ?? ''`);

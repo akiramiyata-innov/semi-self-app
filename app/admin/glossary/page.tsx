@@ -163,7 +163,8 @@ export default function GlossaryPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-3xl mx-auto">
+      {/* 9列の表なので幅を広く取る（v1.57.0。768px では韓国語の列が1文字幅になり縦書きになっていた） */}
+      <div className="max-w-[1500px] mx-auto">
 
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
@@ -198,13 +199,14 @@ export default function GlossaryPage() {
               用語が登録されていません
             </div>
           ) : (
-            <table className="w-full text-sm">
+            <table className="w-full text-sm min-w-[1100px]">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
                   <th className="text-left px-4 py-3 font-medium text-gray-600 whitespace-nowrap">日本語</th>
                   <th className="text-left px-3 py-3 font-medium text-gray-600 whitespace-nowrap">よみ</th>
                   {LANG_LABELS.map((l) => (
-                    <th key={l.key} className="text-left px-3 py-3 font-medium text-gray-600">{l.label}</th>
+                    // 各言語の列に最小幅を持たせ、見出しは折り返さない（狭い列で縦書きにならないように）
+                    <th key={l.key} className="text-left px-3 py-3 font-medium text-gray-600 whitespace-nowrap min-w-[8rem]">{l.label}</th>
                   ))}
                   <th className="w-20" />
                 </tr>

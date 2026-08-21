@@ -44,25 +44,29 @@ const SIZE_MAP = { sm: 220, md: 380, lg: 560, xl: 860 };
 // ★v1.56.0（2026-08-22）: 土台を 8/18 書き出しの base_women.svg（1024×1536）に差し替えた。
 // 新しい土台は**目が描かれておらず**、目は eye-open / eye-close の2枚を重ねて出す
 // （瞬きのため）。旧土台（805.1×1448）とは絵の大きさも位置も違うので、口の位置は
-// 両方の絵の「白目の重心」を機械的に測って写し直した:
-//   旧 両目の中心 (391, 495)・間隔 200  →  新 (510, 506)・間隔 237  ＝ 拡大率 1.18
-//   旧の口 (406, 600) → 新 (512, 630)。口の絵の幅も 1.18 倍。
-//   目視で鼻との間がやや詰まって見えたため、上端を 10 だけ下げて 640 にした。
+// 旧・新の絵の顔の目印を機械的に測って写し直した。
+//
+// ★v1.57.0: 最初は「両目の間隔」の比（1.18）で写したが、本番で「口が下すぎる・閉じた口が
+// 大きい」と指摘を受けた。測り直し＝行ごとの肌色の画素数から**顎（顔幅が半分に細くなる行）**
+// と**口の高さでの顔幅**を取る:
+//   旧: 目 y=495・顎 y=652 → 口の上端 600 は目〜顎の 66.9% の位置。口の高さの顔幅 246
+//   新: 目 y=506・顎 y=660 → 同じ比率で 609。口の高さの顔幅 249（旧とほぼ同じ）
+//   → 口の上端 609・口の絵は**元の大きさのまま**（頬の最大幅は新が1.13倍だが、口の高さでは同じ）
 const BASE_W = 1024;
 const BASE_H = 1536;
 
 /** Mouth anchor on the face, in base.svg units (centre-x, top edge of the lips). */
 const MOUTH_CENTER_X = 512;
-const MOUTH_TOP_Y = 640;
+const MOUTH_TOP_Y = 609;
 
 type MouthShape = "closed" | "a" | "i" | "u" | "e" | "o";
 
 /**
  * Each mouth SVG's own viewBox width, in base.svg units. The mouth SVGs were drawn for
- * the old base (805.1 wide); on the new base the face is 1.18× larger, so the widths
- * are scaled by the same factor (old: closed 86.2 / a 77 / i 94.3 / u 36.9 / e 79.9 / o 41).
+ * the old base (805.1 wide). On the new base the face is the same width at mouth level,
+ * so the widths are used as they are (MOUTH_SCALE is kept as a single knob for tuning).
  */
-const MOUTH_SCALE = 1.18;
+const MOUTH_SCALE = 1.0;
 const MOUTH_WIDTH: Record<MouthShape, number> = {
   closed: 86.2 * MOUTH_SCALE,
   a: 77 * MOUTH_SCALE,
@@ -356,10 +360,13 @@ export function Avatar({
   return (
     <div className="flex flex-col items-center justify-end gap-3 h-full min-h-0">
       <div
-        className={`${containerClass} relative min-h-0 flex-1 w-auto avatar-sway`}
+        className={`${containerClass} relative min-h-0 flex-1 w-auto`}
         style={{ maxHeight: height, aspectRatio: `${BASE_W} / ${BASE_H}` }}
         data-blink={blink ? "1" : "0"}
       >
+       {/* 上半身のゆれ（v1.57.0）。外側の要素には「登場」の animation が付いていて
+           同じ要素に書くと打ち消されるため、絵だけを包む内側の要素で揺らす。 */}
+       <div className="avatar-sway relative w-full h-full" data-sway="1">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/avatar/base.svg"
@@ -408,6 +415,7 @@ export function Avatar({
             }}
           />
         ))}
+       </div>
       </div>
       {/* アバターの下には何も表示しない（「お気軽にどうぞ」「お話し中...」は
           外国語のお客様には読めないため削除した）。発話中かどうかは

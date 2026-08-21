@@ -50,16 +50,22 @@ body {
   transform-origin: center bottom;
 }
 
-/* 上半身のゆれ（v1.56.0）。腰（下端の中央）を支点に、ごくわずかに左右へ傾く。
-   呼吸（breathing）と周期をずらして、機械的な往復に見えないようにする。
+/* 上半身のゆれ（v1.56.0→v1.57.0 で修正）。腰（下端の中央）を支点に、ごくわずかに左右へ
+   傾きながら、呼吸のようにわずかに伸び縮みする。
+   ★同じ要素に「登場（avatar-entrance）」の animation があると、後から書かれた指定が
+   勝って**こちらは動かない**（v1.56.0 の不具合）。必ず**絵だけを包む内側の要素**に付ける。
    動きが苦手な人向けの設定（reduce）では止める。 */
 @keyframes avatar-sway {
-  0%, 100% { transform: rotate(-0.7deg) translateY(0); }
-  50% { transform: rotate(0.7deg) translateY(2px); }
+  0%   { transform: rotate(-0.7deg) scaleY(1); }
+  25%  { transform: rotate(0deg) scaleY(1.015); }
+  50%  { transform: rotate(0.7deg) scaleY(1); }
+  75%  { transform: rotate(0deg) scaleY(1.015); }
+  100% { transform: rotate(-0.7deg) scaleY(1); }
 }
 .avatar-sway {
   animation: avatar-sway 5.2s ease-in-out infinite;
   transform-origin: 50% 100%;
+  will-change: transform;
 }
 @media (prefers-reduced-motion: reduce) {
   .avatar-sway, .avatar-container { animation: none; }
