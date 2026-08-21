@@ -1,12 +1,14 @@
 {
   "name": "semi-self-app",
-  "version": "1.51.0",
+  "version": "1.52.0",
   "private": true,
   "scripts": {
     "dev": "PORT=3001 tsx server.ts",
     "build": "next build",
     "start": "NODE_ENV=production PORT=3001 tsx server.ts",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:regression": "node scripts/regression/run.mjs",
+    "test:regression:quick": "node scripts/regression/run.mjs --quick"
   },
   "dependencies": {
     "@google-cloud/speech": "^7.5.0",

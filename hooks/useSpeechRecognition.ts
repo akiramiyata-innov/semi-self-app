@@ -28,6 +28,8 @@ export type MicErrorCode =
  */
 export interface SttFinalMeta {
   continuation?: boolean;
+  /** 話し始めの時刻（サーバーの時計・v1.52.0）。画面と記録の並び順に使う。 */
+  spokeAt?: number;
 }
 
 interface UseSpeechRecognitionOptions {
@@ -186,8 +188,11 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
     if (sttListenerSocketRef.current === socket) return;
     sttOffRef.current?.(); // 旧ソケットのリスナーを掃除（再接続時）
     const onInterim = (p: { transcript?: string }) => { if (activeRef.current) onInterimRef.current?.(p.transcript ?? ""); };
-    const onFinal = (p: { transcript?: string; continuation?: boolean }) => {
-      if (p.transcript) { onInterimRef.current?.(""); onFinalRef.current?.(p.transcript, { continuation: !!p.continuation }); }
+    const onFinal = (p: { transcript?: string; continuation?: boolean; spokeAt?: number }) => {
+      if (p.transcript) {
+        onInterimRef.current?.("");
+        onFinalRef.current?.(p.transcript, { continuation: !!p.continuation, spokeAt: typeof p.spokeAt === "number" ? p.spokeAt : undefined });
+      }
     };
     const onErr = (p: { message?: string }) => {
       if (activeRef.current) { setError("unknown"); setErrorDetail(p?.message ?? null); }

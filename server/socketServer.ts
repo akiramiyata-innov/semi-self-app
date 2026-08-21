@@ -7,6 +7,7 @@ import { getCached, setCache } from "../lib/translateCache";
 import { getLang, getGoogleTranslateLangCode } from "../lib/languages";
 import type { LangCode, StaffStatus, CameraId } from "../lib/socketEvents";
 import type { TranscriptEntry, SessionLog } from "../lib/types";
+import { insertByOrder } from "../lib/transcriptOrder";
 import { isGCSEnabled, uploadLog } from "../lib/gcsClient";
 import { getGlossaryTermsFresh } from "../lib/glossaryClient";
 import { getAssignmentsFresh } from "../lib/assignmentClient";
@@ -289,6 +290,24 @@ function armSpeakingTimer(sessionId: string, session: ActiveSession): void {
  * （UserScreen.tsx の SPLIT_MERGE_WINDOW_MS）と同じ値にしておく。
  */
 const SPLIT_MERGE_WINDOW_MS = 15_000;
+
+/**
+ * 端末から届いた「話し始めの時刻」の検算（v1.52.0）。元はサーバーが stt:final に付けた
+ * 値を端末がそのまま返したもの。未来の時刻・通話よりはるか前の時刻・数値でないものは
+ * 捨てて、届いた時刻で代用する（テキスト送信には元々無い）。
+ */
+function validSpokeAt(v: unknown, session: ActiveSession): number {
+  const now = Date.now();
+  if (typeof v === "number" && Number.isFinite(v) && v <= now + 1_000 && v >= session.startedAt - 120_000) return v;
+  return now;
+}
+
+/** 発言を話し始めの時刻の順に記録へ差し込む（v1.52.0）。印が付いた係員の返答があれば記録にも残る。 */
+function recordEntry(session: ActiveSession, entry: TranscriptEntry): void {
+  const r = insertByOrder(session.transcript, entry);
+  session.transcript = r.list;
+  if (r.marked.length) console.log(`[transcript] お客様の発言を上に差し込み、確定前の返答 ${r.marked.length} 件に印: ${JSON.stringify(entry.text.slice(0, 40))}`);
+}
 
 /** 分割確定を繋ぐ相手＝直前のお客様の確定発言。古ければ null（v1.51.0）。 */
 function lastUserFinal(session: ActiveSession): TranscriptEntry | null {
@@ -1155,24 +1174,27 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
        */
       if (session) {
         const userSocket = io.sockets.sockets.get(session.userSocketId);
-        const flush = userSocket?.data?.sttFlush as (() => Promise<string[]>) | undefined;
-        const flushed = flush ? await flush().catch(() => [] as string[]) : [];
-        for (const text of flushed) {
+        type Flushed = Array<{ text: string; spokeAt: number }>;
+        const flush = userSocket?.data?.sttFlush as (() => Promise<Flushed>) | undefined;
+        const flushed = flush ? await flush().catch(() => [] as Flushed) : [];
+        for (const { text, spokeAt: rawSpokeAt } of flushed) {
           let translatedText: string | undefined;
           if (session.userLang !== "ja") {
             try {
               translatedText = await translateWithGlossary(text, session.userLang, "ja");
             } catch { /* 訳せなくても原文は記録に残す */ }
           }
-          session.transcript.push({
+          const spokeAt = validSpokeAt(rawSpokeAt, session);
+          recordEntry(session, {
             id: `u-${Date.now()}-${entryCounter++}`,
             speaker: "user",
             text,
             translatedText,
             isFinal: true,
             timestamp: Date.now(),
+            spokeAt,
           });
-          io.to(session.staffSocketId).emit("speech:user", { sessionId, text, lang: session.userLang, isFinal: true, translatedText });
+          io.to(session.staffSocketId).emit("speech:user", { sessionId, text, lang: session.userLang, isFinal: true, translatedText, spokeAt });
           console.log(`[call] 終了直前の発話を確定させて記録: ${JSON.stringify(text.slice(0, 40))} (${sessionId})`);
         }
       }
@@ -1191,7 +1213,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     // ── Speech: user → staff ──────────────────────────────────────────────────
     socket.on(
       "speech:user",
-      (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean; clientId?: string; continuation?: boolean }) => {
+      (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean; clientId?: string; continuation?: boolean; spokeAt?: number }) => {
         const { sessionId, text, lang, isFinal, clientId, continuation } = payload;
         const session = activeSessions.get(sessionId);
         if (!session) return;
@@ -1206,6 +1228,9 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           io.to(session.staffSocketId).emit("speech:user", { sessionId, text, lang, isFinal: false });
           return;
         }
+
+        // 話し始めの時刻（v1.52.0）。届いた時点で検算する（行列で待つ間に「今」がずれないように）
+        const spokeAt = validSpokeAt(payload.spokeAt, session);
 
         // 確定は**届いた順**に処理する（inOrder の説明を参照）。
         userSpeechChain = inOrder(userSpeechChain, async () => {
@@ -1242,22 +1267,26 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           setUserSpeaking(sessionId, session, false);
           session.lastUserFinalAt = Date.now();
           if (prev) {
+            // 繋いだ発言の話し始めは前半のまま（並び順は変えない）
             prev.text = fullText;
             prev.translatedText = translatedText;
             prev.translationFailed = translationFailed || undefined;
             console.log(`[speech:user] 分割確定を直前の発言に繋いで訳し直した: ${JSON.stringify(fullText.slice(0, 80))}`);
-            io.to(session.staffSocketId).emit("speech:user", { sessionId, text: fullText, lang, isFinal: true, translatedText, translationFailed, replacesPrev: true });
+            io.to(session.staffSocketId).emit("speech:user", { sessionId, text: fullText, lang, isFinal: true, translatedText, translationFailed, replacesPrev: true, spokeAt: prev.spokeAt });
           } else {
-            session.transcript.push({
+            // 話し始めの時刻の順に記録へ差し込む（v1.52.0）。係員の返答より上に入ったときは、
+            // その返答に「確定前の返答」の印が付く。係員画面も同じ規則で差し込む。
+            recordEntry(session, {
               id: `u-${Date.now()}-${entryCounter++}`,
               speaker: "user",
               text,
               translatedText,
               isFinal: true,
               timestamp: Date.now(),
+              spokeAt,
               translationFailed: translationFailed || undefined,
             });
-            io.to(session.staffSocketId).emit("speech:user", { sessionId, text, lang, isFinal: true, translatedText, translationFailed });
+            io.to(session.staffSocketId).emit("speech:user", { sessionId, text, lang, isFinal: true, translatedText, translationFailed, spokeAt });
           }
 
           // お客様側に「係員の画面に届いた」ことを返す（キオスクで既読チェックを表示する）。
@@ -1327,7 +1356,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     // ── Speech: staff → user ──────────────────────────────────────────────────
     socket.on(
       "speech:staff",
-      (payload: { sessionId: string; text: string; isFinal: boolean; clientId?: string }) => {
+      (payload: { sessionId: string; text: string; isFinal: boolean; clientId?: string; spokeAt?: number }) => {
         const { sessionId, text, isFinal, clientId } = payload;
         const session = activeSessions.get(sessionId);
         if (!session) return;
@@ -1337,6 +1366,11 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
         const userLang = session.userLang;
         let translatedText: string | undefined;
+        // 話し始めの時刻（v1.52.0）。テキスト送信には無いので届いた時刻になる
+        const spokeAt = validSpokeAt(payload.spokeAt, session);
+        // 受け取った時刻。記録の timestamp はこれにする（記録は読み上げが終わってから行う
+        // ため、そのときの時刻だと「確定前の返答」の判定＝お客様の発言が届く前に答えたか＝が狂う）
+        const receivedAt = Date.now();
 
         if (isFinal) {
           metrics.noteStaffSpeechFinal(sessionId);
@@ -1395,7 +1429,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
             if (userTextSent) return;
             userTextSent = true;
             io.to(session.userSocketId).emit("speech:staff", {
-              sessionId, text: translatedText, isFinal: true, forceShowText,
+              sessionId, text: translatedText, isFinal: true, forceShowText, spokeAt,
             });
           };
 
@@ -1427,7 +1461,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
             sessionId, text, isFinal: true, clientId,
             translatedText: userLang !== "ja" ? translatedText : undefined,
             // 4秒で消えるトーストを見逃しても分かるよう、発言そのものに印を残す。
-            translationFailed, voiceFailed: !tts.ok,
+            translationFailed, voiceFailed: !tts.ok, spokeAt,
           });
 
           // 係員は自分の発言が普通に表示されるため、音声が届かなかったことに気づけない。
@@ -1445,13 +1479,14 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
             recordAppError({ type: "tts-synthesis", sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), side: "staff", detail: `${partial ? "一部の" : ""}音声を合成できず文字のみ表示: ${text.slice(0, 60)}` });
           }
 
-          session.transcript.push({
+          recordEntry(session, {
             id: `s-${Date.now()}-${entryCounter++}`,
             speaker: "staff",
             text,
             translatedText: userLang !== "ja" ? translatedText : undefined,
             isFinal: true,
-            timestamp: Date.now(),
+            timestamp: receivedAt,
+            spokeAt,
             translationFailed: translationFailed || undefined,
             voiceFailed: !tts.ok || undefined,
           });

@@ -59,6 +59,16 @@ export function TranscriptPanel({ entries, interimUserText, interimStaffText, us
               {entry.translatedText}
             </div>
           )}
+          {/* 「確定前の返答」の印（v1.52.0）。お客様の発言があとから上に差し込まれた
+              とき、その直後の係員の返答に付く＝その発言を見ないうちに答えていた可能性。
+              係員が「答えた内容で合っているか」を確かめるきっかけにする。 */}
+          {entry.speaker === "staff" && entry.earlyReply && (
+            <div className="mt-1">
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                ↑ お客様の発言が確定する前の返答
+              </span>
+            </div>
+          )}
           {/* 失敗の印。通知（トースト）は4秒で消えるため、発言そのものに残して
               後から見返しても分かるようにする。 */}
           {(entry.translationFailed || entry.voiceFailed) && (

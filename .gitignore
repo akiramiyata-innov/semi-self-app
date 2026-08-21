@@ -56,3 +56,6 @@ scripts/test-agent/out/
 
 # 窓処サーバへの通知の確認記録（実行のたびに増える作業ファイル）
 scripts/kiosk-notify/received.log
+
+# 退行テストの実行結果（画面・前回の結果）
+scripts/regression/out/

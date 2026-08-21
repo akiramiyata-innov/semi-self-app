@@ -59,6 +59,11 @@ export interface SpeechUserPayload {
    * 新しい吹き出しは作らない。
    */
   replacesPrev?: boolean;
+  /**
+   * 話し始めの時刻（サーバーの時計・v1.52.0）。キオスクは stt:final で受け取った値を
+   * そのまま送り返し、サーバーは検算してから記録と係員への送信に使う。画面はこの順に並べる。
+   */
+  spokeAt?: number;
 }
 
 export interface SpeechStaffPayload {
@@ -66,6 +71,8 @@ export interface SpeechStaffPayload {
   text: string; // Japanese (original)
   isFinal: boolean;
   translatedText?: string; // User's language translation, server-added
+  /** 話し始めの時刻（サーバーの時計・v1.52.0）。テキスト送信には無く、サーバーが届いた時刻を使う。 */
+  spokeAt?: number;
 }
 
 /**

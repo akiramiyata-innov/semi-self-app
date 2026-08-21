@@ -16,6 +16,7 @@ import { getSharedAudioContext } from "@/lib/audioUnlock";
 import { UserAudioPlayer } from "@/lib/userAudioPlayer";
 import { APP_VERSION } from "@/lib/appVersion";
 import type { TranscriptEntry } from "@/lib/types";
+import { insertByOrder } from "@/lib/transcriptOrder";
 import type { LangCode, StaffStatus, StaffInfo } from "@/lib/socketEvents";
 
 interface IncomingCall {
@@ -402,13 +403,15 @@ export default function StaffPage() {
       // ▶ Fix: also emit interim to server so user sees live typing
       socketRef.current?.emit("speech:staff", { sessionId: sid, text, isFinal: false });
     },
-    onFinal: (text) => {
+    onFinal: (text, meta) => {
       const sid = activeListeningSession.current;
       if (!sid) return;
 
       // 先に自分の発話を表示し、その id を clientId として送る。訳文が返ってきたら
       // この id の吹き出しに書き足す（同じ文言を続けて話しても取り違えない）。
+      // 並びは話し始めの時刻（spokeAt）の順（v1.52.0）。
       const entryId = makeId();
+      const spokeAt = meta?.spokeAt;
       setActiveSessions((prev) => {
         const next = new Map(prev);
         const session = next.get(sid);
@@ -416,16 +419,14 @@ export default function StaffPage() {
           next.set(sid, {
             ...session,
             interimStaffText: "",
-            transcript: [
-              ...session.transcript,
-              { id: entryId, speaker: "staff", text, isFinal: true, timestamp: Date.now() },
-            ],
+            transcript: insertByOrder(session.transcript,
+              { id: entryId, speaker: "staff", text, isFinal: true, timestamp: Date.now(), spokeAt }).list,
           });
         }
         return next;
       });
 
-      socketRef.current?.emit("speech:staff", { sessionId: sid, text, isFinal: true, clientId: entryId });
+      socketRef.current?.emit("speech:staff", { sessionId: sid, text, isFinal: true, clientId: entryId, spokeAt });
       // ここから先の「準備しています」はサーバーが引き継ぐ（返答が届いた時点でキオスクが消す）。
       // 手元の記録だけ白紙に戻し、次の発話でまた案内を出せるようにする（通知は送らない）。
       // 消すときの宛先（lastComposingSidRef）はここでは消さない。
@@ -746,8 +747,8 @@ export default function StaffPage() {
 
     s.on(
       "speech:user",
-      (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean; translatedText?: string; translationFailed?: boolean; replacesPrev?: boolean }) => {
-        const { sessionId, text, translatedText, isFinal, translationFailed, replacesPrev } = payload;
+      (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean; translatedText?: string; translationFailed?: boolean; replacesPrev?: boolean; spokeAt?: number }) => {
+        const { sessionId, text, translatedText, isFinal, translationFailed, replacesPrev, spokeAt } = payload;
         if (!isFinal) {
           updateSession(sessionId, { interimUserText: text });
           return;
@@ -759,14 +760,14 @@ export default function StaffPage() {
             // 分割確定を繋いだ結果（replacesPrev）は、直前のお客様の吹き出しを全文と
             // 訳し直した日本語で差し替える（v1.51.0）。相手が無いとき（画面を開き直した
             // 直後など）は新しい発言として足す。
+            // 新しい発言は話し始めの時刻（spokeAt）の順に差し込む（v1.52.0）。係員の返答
+            // より上に入ったときは、その返答に「確定前の返答」の印が付く。
             const replaced = replacesPrev ? replaceLastUserFinal(session.transcript, { text, translatedText, translationFailed }) : null;
             next.set(sessionId, {
               ...session,
               interimUserText: "",
-              transcript: replaced ?? [
-                ...session.transcript,
-                { id: makeId(), speaker: "user", text, translatedText, isFinal: true, timestamp: Date.now(), translationFailed },
-              ],
+              transcript: replaced ?? insertByOrder(session.transcript,
+                { id: makeId(), speaker: "user", text, translatedText, isFinal: true, timestamp: Date.now(), translationFailed, spokeAt }).list,
             });
           }
           return next;
@@ -1654,10 +1655,9 @@ export default function StaffPage() {
                         next.set(session.sessionId, {
                           ...s,
                           interimStaffText: "",
-                          transcript: [
-                            ...s.transcript,
-                            { id: entryId, speaker: "staff", text, isFinal: true, timestamp: Date.now() },
-                          ],
+                          // テキスト送信に話し始めは無い＝送った時刻で並ぶ（v1.52.0）
+                          transcript: insertByOrder(s.transcript,
+                            { id: entryId, speaker: "staff", text, isFinal: true, timestamp: Date.now() }).list,
                         });
                       }
                       return next;

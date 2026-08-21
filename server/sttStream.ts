@@ -62,6 +62,12 @@ const BOOST_FOREIGN = Number(process.env.STT_ADAPTATION_BOOST_FOREIGN ?? "5");
  *   速さと切れやすさの両方を実測してから決めること。既定は現状維持（0＝指定しない）。
  */
 const SPEECH_END_TIMEOUT_MS = Number(process.env.STT_SPEECH_END_TIMEOUT_MS ?? "0");
+/**
+ * 話し始めの時刻（spokeAt）が取れなかったときの代わり（v1.52.0）。確定は話し終わりの
+ * 約1.5秒後に来るので、途中経過が一度も届かない短い発話（「はい」など）は、確定の
+ * 約2秒前に話し始めたとみなす。
+ */
+const NO_INTERIM_FALLBACK_MS = 2_000;
 
 /**
  * 音声認識（chirp_2）に渡す言語コードの読み替え表。
@@ -324,8 +330,14 @@ export function registerSttHandlers(
   let glossaryField: ReturnType<typeof glossaryFieldOf> = null;
   let running = false;
   let consecutiveErrors = 0;
+  /**
+   * いま話している発話の「話し始めの時刻」（v1.52.0）＝ゲートを通った最初の途中経過が
+   * 届いた時刻。確定を送るときに spokeAt として添え、次の発話のために消す。
+   * 画面と記録はこの時刻の順に並ぶ（lib/transcriptOrder.ts）。
+   */
+  let utteranceStartedAt: number | null = null;
   // 通話終了時の拾い上げ（flushPendingFinal）中だけ、確定テキストをここへも回収する
-  let flushCollector: ((transcript: string) => void) | null = null;
+  let flushCollector: ((transcript: string, meta: { spokeAt: number }) => void) | null = null;
   /**
    * 確定を「届いた順」に送り出すための待ち行列（v1.49.0・2026-08-21）。
    *
@@ -484,6 +496,10 @@ export function registerSttHandlers(
         // ★ここから先は**届いた順**に流す（finalChain の説明を参照）。仕上げの
         //   待ち時間が文ごとに違うため、並行に処理すると分割確定の後半が前半を
         //   追い越して届く。見張り（上のガード）はすべてこの行より前で済ませてある。
+        // 話し始めの時刻（v1.52.0）。この確定がどの発話のものかは届いた瞬間に決まるので、
+        // 行列に並べる前に取り出して次の発話のために消す。
+        const spokeAt = utteranceStartedAt ?? Date.now() - NO_INTERIM_FALLBACK_MS;
+        utteranceStartedAt = null;
         finalChain = finalChain.then(async () => {
           // 確定時のみ、同音の別表記を用語集の登録どおりに矯正する。
           // 日本語は読み照合（kuromoji）、外国語は発音・表記の照合（施策2）。
@@ -498,8 +514,9 @@ export function registerSttHandlers(
           // continuation＝分割確定（同じ音声から続けて出た2つ目）の印。キオスクが
           // 「直前の自分の発言の続き」として送り返し、サーバーが1つの文に繋いで
           // 訳し直す（v1.51.0）。印はここで初めて付き、客側を経由して戻ってくる。
-          socket.emit("stt:final", { transcript, continuation: verdict.continuation || undefined });
-          flushCollector?.(transcript); // 通話終了時の拾い上げ中なら、サーバー側でも回収する
+          // spokeAt（話し始めの時刻）も同じ経路で往復し、サーバーが並び順に使う（v1.52.0）。
+          socket.emit("stt:final", { transcript, continuation: verdict.continuation || undefined, spokeAt });
+          flushCollector?.(transcript, { spokeAt }); // 通話終了時の拾い上げ中なら、サーバー側でも回収する
           noteSttFinal(socket.id); // 性能測定：発話終了→確定テキスト
         }).catch((e) => { console.error("[stt] 確定の仕上げでエラー:", e); });
         await finalChain;
@@ -509,6 +526,7 @@ export function registerSttHandlers(
         if (inspectGlossaryDump(base, phrases).isDump) return;
         if (isDegenerateRun(base)) return;
         socket.emit("stt:interim", { transcript: base });
+        if (utteranceStartedAt === null) utteranceStartedAt = Date.now(); // この発話の話し始め（v1.52.0）
         onInterim?.(base); // ゲートを通った途中経過＝「実際に話している」確かな合図
       }
     });
@@ -565,6 +583,7 @@ export function registerSttHandlers(
 
   function stopStream(): void {
     running = false;
+    utteranceStartedAt = null; // 話しかけの時刻を次のマイクONへ持ち越さない
     onInterim?.(""); // 表示済みの途中経過を消す（マイクOFF後に確定が来ない場合の残留防止）
     pendingAudio = []; // 次にONにしたとき、前回の言い残しが混ざらないように捨てる
     if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
@@ -588,10 +607,10 @@ export function registerSttHandlers(
    * クライアント側ドレイン3秒と同じ値）。
    */
   const FLUSH_MAX_MS = Number(process.env.STT_FLUSH_MAX_MS ?? "3000");
-  async function flushPendingFinal(): Promise<string[]> {
+  async function flushPendingFinal(): Promise<Array<{ text: string; spokeAt: number }>> {
     if (!running || !stream || !gate.hasSpeech()) return [];
-    const collected: string[] = [];
-    flushCollector = (t) => collected.push(t);
+    const collected: Array<{ text: string; spokeAt: number }> = [];
+    flushCollector = (t, meta) => collected.push({ text: t, spokeAt: meta.spokeAt });
     // stopStream 相当の後片付け。ただしストリームは破棄せず半クローズして結果を待つ。
     running = false;
     pendingAudio = [];
@@ -624,6 +643,7 @@ export function registerSttHandlers(
     running = true;
     consecutiveErrors = 0;
     gate.reset();      // マイクON時に音量計測をやり直す
+    utteranceStartedAt = null;
     micStartedAt = Date.now();
     voiceRun = 0;
     pendingAudio = [];

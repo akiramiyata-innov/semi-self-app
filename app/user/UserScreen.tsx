@@ -16,6 +16,7 @@ import { installClientErrorReporter } from "@/lib/clientErrorReporter";
 import { notifyCallEnded } from "@/lib/kioskNotify";
 import type { CallEndStatus } from "@/lib/kioskNotify";
 import type { TranscriptEntry } from "@/lib/types";
+import { insertByOrder } from "@/lib/transcriptOrder";
 import type { LangCode } from "@/lib/socketEvents";
 
 type Phase = "lang-select" | "idle" | "calling" | "in-call" | "ended" | "rejected" | "no-staff" | "call-timeout" | "disconnected" | "staff-disconnected";
@@ -379,7 +380,8 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
   /** 発言を1件追加し、そのidを返す（お客様の発言は「係員に伝わりました」の照合に使う）。 */
   const addEntry = useCallback((entry: Omit<TranscriptEntry, "id" | "timestamp">) => {
     const id = makeId();
-    setTranscript((prev) => [...prev, { ...entry, id, timestamp: Date.now() }]);
+    // 話し始めの時刻（spokeAt）の順に差し込む（v1.52.0）。係員画面・通話記録と同じ規則。
+    setTranscript((prev) => insertByOrder(prev, { ...entry, id, timestamp: Date.now() }).list);
     return id;
   }, []);
 
@@ -398,7 +400,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
    * 訳し直し、記録と係員画面を差し替える。直前の発言が古ければ繋がない。
    * 返り値の clientId は、繋いだときは直前の発言のid（既読チェックの宛先が同じになる）。
    */
-  const placeUserFinal = useCallback((text: string, continuation: boolean): { clientId: string; joined: boolean } => {
+  const placeUserFinal = useCallback((text: string, continuation: boolean, spokeAt?: number): { clientId: string; joined: boolean } => {
     const prev = lastUserFinalRef.current;
     const now = Date.now();
     if (continuation && prev && now - prev.at < SPLIT_MERGE_WINDOW_MS) {
@@ -407,7 +409,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       lastUserFinalRef.current = { id: prevId, at: now };
       return { clientId: prevId, joined: true };
     }
-    const id = addEntry({ speaker: "user", text, isFinal: true });
+    const id = addEntry({ speaker: "user", text, isFinal: true, spokeAt });
     lastUserFinalRef.current = { id, at: now };
     return { clientId: id, joined: false };
   }, [addEntry]);
@@ -424,7 +426,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         return;
       }
       setInterimUser("");
-      const { clientId, joined } = placeUserFinal(text, !!meta?.continuation);
+      const { clientId, joined } = placeUserFinal(text, !!meta?.continuation, meta?.spokeAt);
       socketRef.current?.emit("speech:user", {
         sessionId: sessionIdRef.current,
         text, // 繋ぐときも送るのは続きの部分だけ（全文はサーバーの記録から組み立てる）
@@ -432,6 +434,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         isFinal: true,
         clientId, // 係員に届いたら speech:delivered でこのidが返る
         continuation: joined || undefined,
+        spokeAt: meta?.spokeAt, // 話し始めの時刻（サーバーが付けた値をそのまま返す・v1.52.0）
       });
       // Legacy paths give one final per mic session → auto-OFF after sending.
       // Streaming gives a final per pause, so keep the mic ON for continuous speech.
@@ -986,12 +989,13 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       if (pending) { pendingEndRef.current = null; setTimeout(pending, NO_AUDIO_GRACE_MS); }
     });
 
-    s.on("speech:staff", (payload: { text: string; isFinal: boolean; forceShowText?: boolean }) => {
+    s.on("speech:staff", (payload: { text: string; isFinal: boolean; forceShowText?: boolean; spokeAt?: number }) => {
       setStaffComposing(false); // 返事が来た（途中表示でも）＝準備中の表示は不要
       composingSynthesizingRef.current = false;
       if (payload.isFinal) {
         setInterimStaff("");
-        const entryId = addEntry({ speaker: "staff", text: payload.text, isFinal: true });
+        // 係員の発言も話し始めの時刻の順に並ぶ（v1.52.0）
+        const entryId = addEntry({ speaker: "staff", text: payload.text, isFinal: true, spokeAt: payload.spokeAt });
         lastStaffEntryIdRef.current = entryId;
         // 音声を届けられなかった＝この1件は設定に関わらず文字で出す
         if (payload.forceShowText) setForcedTextIds((prev) => [...prev, entryId]);
