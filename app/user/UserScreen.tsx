@@ -732,6 +732,29 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     pendingEndRef.current = null;
   }, [stopMic]);
 
+  /**
+   * 「知らせを数秒見せてから待機画面へ戻す」ときの後始末（v1.48.0・2026-08-21）。
+   *
+   * ★戻す処理は数秒あとに走るため、**その間に次の通話が始まっていることがある**。
+   *   サーバーは同じ端末から呼び直されると、新しい通話を作る**直前に**前の通話へ
+   *   終了を知らせる（socketServer.ts「同じ端末からの再呼び出し」）。お客様の画面には
+   *
+   *     call:ended(前の通話) → call:requested(新) → call:answered(新)
+   *
+   *   の順で届くので、そのまま3秒後に戻すと、**係員は通話中なのにお客様画面だけ
+   *   言語選択へ落ちる**（再現済み）。戻す直前に「まだあの通話のままか」を確かめる。
+   *
+   * @param callId 戻そうとしている通話。null なら通話に紐づかない案内（確認しない）
+   */
+  const laterIfSameCall = useCallback((callId: string | null, ms: number, run: () => void) => {
+    setTimeout(() => {
+      // 別の通話が始まっている＝その画面を消してはいけない。
+      // 何も始まっていなければ（null）予定どおり戻す。
+      if (callId !== null && sessionIdRef.current !== null && sessionIdRef.current !== callId) return;
+      run();
+    }, ms);
+  }, []);
+
   // Socket.IO setup
   useEffect(() => {
     const s = io({ path: "/socket.io", transports: ["websocket", "polling"] });
@@ -777,34 +800,49 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       setTimeout(() => setPhase("idle"), 5000);
     });
 
-    s.on("call:timeout", () => {
+    s.on("call:timeout", (payload?: { sessionId?: string }) => {
       // 係員は在席しているが、誰も応答しないまま打ち切り時間が過ぎた。
       // お客様を無期限に待たせず「混み合っています」を出して待機画面へ戻す。
+      const callId = sessionIdRef.current;
+      if (payload?.sessionId && callId && payload.sessionId !== callId) return; // 前の呼び出しあて
       setSessionId(null);
       sessionIdRef.current = null;
       setPhase("call-timeout");
-      setTimeout(() => setPhase("idle"), 5000);
+      laterIfSameCall(callId, 5000, () => setPhase("idle"));
     });
 
-    s.on("call:rejected", () => {
+    s.on("call:rejected", (payload?: { sessionId?: string }) => {
       // Staff declined — show message briefly then return to lang-select
+      const callId = sessionIdRef.current;
+      if (payload?.sessionId && callId && payload.sessionId !== callId) return; // 前の呼び出しあて
       setPhase("rejected");
       setSessionId(null);
       sessionIdRef.current = null;
-      setTimeout(() => setPhase("lang-select"), 3000);
+      laterIfSameCall(callId, 3000, () => setPhase("lang-select"));
     });
 
-    s.on("call:staffDisconnected", () => {
+    s.on("call:staffDisconnected", (payload?: { sessionId?: string }) => {
+      const callId = sessionIdRef.current;
+      if (payload?.sessionId && callId && payload.sessionId !== callId) return; // 前の通話あて
       setPhase("staff-disconnected");
       stopMic();
       micOnRef.current = false;
-      setTimeout(() => {
+      laterIfSameCall(callId, 5000, () => {
         setPhase("idle");
         resetCallState();
-      }, 5000);
+      });
     });
 
-    s.on("call:ended", () => {
+    s.on("call:ended", (payload?: { sessionId?: string }) => {
+      /**
+       * ★どの通話あての終了かを必ず確かめる（v1.48.0・2026-08-21）。
+       *
+       * お客様の画面は通話の「部屋」から抜けない（サーバーが部屋から外すのは
+       * 終了を押した側のソケットだけ＝socketServer.ts の call:end）。そのため
+       * **前の通話あての終了通知が、あとから届くことがある**。
+       */
+      const callId = sessionIdRef.current;
+      if (payload?.sessionId && callId && payload.sessionId !== callId) return;
       // ★読み上げが残っているなら、終わるまで画面を切り替えない。
       //   係員が「ありがとうございました」と言った直後に終了を押すのが自然な流れだが、
       //   そのままだと読み上げの途中で画面が消えてしまう。待つべき状態は2つある。
@@ -814,14 +852,17 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       //       **その間に終了されると call:ended のほうが先に着く**（実測で確認）。
       //       「準備中(synthesizing)」の合図が先に届くので、それで判断している。
       const finish = () => {
+        // ★この通話がもう入れ替わっているなら、画面には手を触れない。
+        //   読み上げ待ちで数秒置いてから走ることがあるため、ここでも確かめる。
+        if (callId && sessionIdRef.current && sessionIdRef.current !== callId) return;
         setPhase("ended");
         stopMic();
         micOnRef.current = false;
         // Return to lang-select after 3 seconds
-        setTimeout(() => {
+        laterIfSameCall(callId, 3000, () => {
           setPhase("lang-select");
           resetCallState();
-        }, 3000);
+        });
       };
       // 「もう鳴っている」だけでなく「これから鳴る」場合も待つ。
       if (!avatarSpeakingRef.current && !speechPendingRef.current) { finish(); return; }

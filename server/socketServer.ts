@@ -934,6 +934,11 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
         });
         io.to(`session:${oldId}`).emit("call:ended", { sessionId: oldId });
         io.to("call-queue").emit("call:ended", { sessionId: oldId });
+        // ★終わった通話の部屋は空にする（v1.48.0・2026-08-21）。空にしないと
+        //   お客様のソケットが前の通話の部屋に残り続け、**次の通話が始まったあとに
+        //   前の通話あての終了通知を受け取ってしまう**（キオスク側で照合していても、
+        //   届かないに越したことはない）。leaveは終了を送ったあとに行う。
+        io.in(`session:${oldId}`).socketsLeave(`session:${oldId}`);
         saveSessionLog(old).catch((e) => console.error("[log] 幽霊通話の保存に失敗:", e));
         console.log(`[call] 同じ端末からの再呼び出しにより前の通話を終了: ${old.machineName} (${oldId})`);
       });
@@ -1133,7 +1138,11 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
       }
       io.to(`session:${sessionId}`).emit("call:ended", { sessionId });
       io.to("call-queue").emit("call:ended", { sessionId }); // Notify all staff to clear the call
-      socket.leave(`session:${sessionId}`);
+      // ★終了を押した側だけでなく、**両者**を部屋から外す（v1.48.0・2026-08-21）。
+      //   従来は socket.leave で送信者だけが抜けており、係員が終了を押すと
+      //   お客様のソケットが部屋に残り続けた。同じ画面で通話を重ねるほど古い部屋が
+      //   たまり、前の通話あての通知が現在の通話に届く元になっていた。
+      io.in(`session:${sessionId}`).socketsLeave(`session:${sessionId}`);
       broadcastStaffList();
       // 保存は最後（通知を待たせない）。この時点で一覧からは外れているので二重保存は起きない
       if (session) await saveSessionLog(session);
@@ -1626,6 +1635,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
             activeSessions.delete(sessionId);
             io.to(session.staffSocketId).emit("call:ended", { sessionId });
             io.to("call-queue").emit("call:ended", { sessionId });
+            // 残った側（係員）も部屋から外す（v1.48.0。部屋のたまり込みを防ぐ）
+            io.in(`session:${sessionId}`).socketsLeave(`session:${sessionId}`);
           } else {
             // Staff disconnected — notify user with a distinct event (not call:ended)
             io.to(session.userSocketId).emit("call:staffDisconnected", { sessionId });
@@ -1633,6 +1644,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
             clearSpeakingState(session);
             activeSessions.delete(sessionId);
             io.to("call-queue").emit("call:ended", { sessionId });
+            // 残った側（お客様）も部屋から外す（v1.48.0。部屋のたまり込みを防ぐ）
+            io.in(`session:${sessionId}`).socketsLeave(`session:${sessionId}`);
           }
         }
       });
