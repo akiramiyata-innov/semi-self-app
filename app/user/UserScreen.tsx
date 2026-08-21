@@ -1756,65 +1756,68 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
       )}
 
       {langPanelOpen && (
-        <div
-          className="absolute inset-0 z-40 bg-black/40 flex items-center justify-center p-10"
-          onClick={closeLangPanel}
-        >
+        <div className="absolute inset-0 z-40 bg-black/40" onClick={closeLangPanel}>
+          {/* ★v1.55.0: 一覧は画面の下に寄せ、言語のボタンを1段に並べる（ユーザー指示）。
+              以前は画面中央に4列×2段の大きな一覧で、アバターの顔まで隠れていた。
+              下に寄せた札は画面下のボタン列に重なってよい。国旗は 2xl（1536px）以上の
+              幅でだけ出す（検証機1536・窓処端末1920。狭い画面では文字だけにして1段を保つ）。 */}
           <div
-            className="bg-white rounded-3xl shadow-2xl px-12 py-10 w-full max-w-3xl"
+            className="absolute left-6 right-6 bottom-6 bg-white rounded-3xl shadow-2xl px-8 py-5"
             onClick={(e) => e.stopPropagation()}
           >
             {pendingLang && pendingLangConfig && pendingUi ? (
-              <>
-                <div className="flex flex-col items-center gap-3">
-                  <Flag code={pendingLangConfig.code} size={104} />
-                  <span className="text-4xl font-bold text-gray-900">{pendingLangConfig.label}</span>
+              <div className="flex items-center gap-8">
+                <div className="flex items-center gap-4 shrink-0">
+                  <Flag code={pendingLangConfig.code} size={64} />
+                  <span className="text-3xl font-bold text-gray-900">{pendingLangConfig.label}</span>
                 </div>
                 {/* 変更後の言語で尋ねる。押し間違えても意味が分かるよう今の言語でも併記する。 */}
-                <p className="mt-8 text-3xl font-bold text-gray-900 text-center leading-snug">{pendingUi.confirmQ}</p>
-                <p className="mt-2 text-xl text-gray-500 text-center">{ui.confirmQ}</p>
-                <div className="mt-10 flex items-center justify-center gap-5">
+                <div className="flex-1 min-w-0">
+                  <p className="text-2xl font-bold text-gray-900 leading-snug">{pendingUi.confirmQ}</p>
+                  <p className="mt-1 text-base text-gray-500">{ui.confirmQ}</p>
+                </div>
+                <div className="flex items-center gap-4 shrink-0">
                   <button
                     onClick={closeLangPanel}
-                    className="px-10 py-4 rounded-full bg-gray-200 hover:bg-gray-300 active:scale-95 text-2xl font-bold text-gray-700 transition-all"
+                    className="px-8 py-3 rounded-full bg-gray-200 hover:bg-gray-300 active:scale-95 text-xl font-bold text-gray-700 transition-all"
                   >
                     {ui.cancel}
                   </button>
                   <button
                     onClick={confirmLangChange}
-                    className="px-10 py-4 rounded-full bg-[#8b5cf6] hover:bg-[#7c3aed] active:scale-95 text-2xl font-bold text-white shadow-lg transition-all"
+                    className="px-8 py-3 rounded-full bg-[#8b5cf6] hover:bg-[#7c3aed] active:scale-95 text-xl font-bold text-white shadow-lg transition-all"
                   >
                     {pendingUi.confirmYes}
                   </button>
                 </div>
-              </>
+              </div>
             ) : (
               <>
-                <p className="text-3xl font-bold text-gray-900 text-center">{ui.langPick}</p>
-                <div className="mt-8 grid grid-cols-4 gap-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-2xl font-bold text-gray-900">{ui.langPick}</p>
+                  <button
+                    onClick={closeLangPanel}
+                    className="px-6 py-2 rounded-full bg-gray-200 hover:bg-gray-300 active:scale-95 text-lg font-bold text-gray-700 transition-all"
+                  >
+                    {ui.cancel}
+                  </button>
+                </div>
+                <div className="mt-4 grid grid-cols-8 gap-3">
                   {SUPPORTED_LANGS.map((l) => (
                     <button
                       key={l.code}
                       onClick={() => setPendingLang(l.code)}
                       disabled={l.code === userLang}
-                      className={`flex flex-col items-center gap-2 rounded-2xl p-5 border-2 transition-all ${
+                      className={`flex items-center justify-center gap-2 rounded-2xl py-4 px-2 border-2 transition-all overflow-hidden ${
                         l.code === userLang
                           ? "border-[#8b5cf6] bg-violet-50 opacity-60"
                           : "border-gray-200 hover:border-[#8b5cf6] hover:bg-violet-50 active:scale-95"
                       }`}
                     >
-                      <Flag code={l.code} size={68} />
-                      <span className="text-base font-medium text-gray-800">{l.label}</span>
+                      <span className="hidden 2xl:inline-flex shrink-0"><Flag code={l.code} size={28} /></span>
+                      <span className="text-lg font-medium text-gray-800 whitespace-nowrap">{l.label}</span>
                     </button>
                   ))}
-                </div>
-                <div className="mt-8 flex justify-center">
-                  <button
-                    onClick={closeLangPanel}
-                    className="px-10 py-4 rounded-full bg-gray-200 hover:bg-gray-300 active:scale-95 text-2xl font-bold text-gray-700 transition-all"
-                  >
-                    {ui.cancel}
-                  </button>
                 </div>
               </>
             )}
