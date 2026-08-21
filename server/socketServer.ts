@@ -95,6 +95,8 @@ interface ActiveSession extends CallRecord {
   speakingConfirmed?: boolean;
   /** アバターが発話中か（キオスクのマイクが自分の声を拾うため、その間は発話中表示を止める）。 */
   avatarSpeaking?: boolean;
+  /** お客様の発言が最後に確定した時刻。分割確定を直前の発言に繋ぐ判定に使う（v1.51.0）。 */
+  lastUserFinalAt?: number;
   /**
    * お客様の画面に会話のテキストを出しているか。**既定は非表示**（駅の券売機は人が
    * 並ぶ場所で、文字は画面に残るため後ろから読まれやすい）。お客様側・係員側の
@@ -279,6 +281,23 @@ function armSpeakingTimer(sessionId: string, session: ActiveSession): void {
     session.speakingTimer = undefined;
     setUserSpeaking(sessionId, session, false);
   }, session.speakingConfirmed ? USER_SPEAKING_MAX_MS : USER_SPEAKING_UNCONFIRMED_MS);
+}
+
+/**
+ * 分割確定を直前のお客様の発言に繋いでよい間隔（v1.51.0）。分割確定は本来0.0秒差で
+ * 届くので、これは印の取り違えで古い発言に繋がないための保険。キオスク側
+ * （UserScreen.tsx の SPLIT_MERGE_WINDOW_MS）と同じ値にしておく。
+ */
+const SPLIT_MERGE_WINDOW_MS = 15_000;
+
+/** 分割確定を繋ぐ相手＝直前のお客様の確定発言。古ければ null（v1.51.0）。 */
+function lastUserFinal(session: ActiveSession): TranscriptEntry | null {
+  if (!session.lastUserFinalAt || Date.now() - session.lastUserFinalAt > SPLIT_MERGE_WINDOW_MS) return null;
+  for (let i = session.transcript.length - 1; i >= 0; i--) {
+    const e = session.transcript[i];
+    if (e.speaker === "user" && e.isFinal) return e;
+  }
+  return null;
 }
 
 /** 通話終了時にタイマーを止める（残ったタイマーが後から発火しないように）。 */
@@ -1172,8 +1191,8 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     // ── Speech: user → staff ──────────────────────────────────────────────────
     socket.on(
       "speech:user",
-      (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean; clientId?: string }) => {
-        const { sessionId, text, lang, isFinal, clientId } = payload;
+      (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean; clientId?: string; continuation?: boolean }) => {
+        const { sessionId, text, lang, isFinal, clientId, continuation } = payload;
         const session = activeSessions.get(sessionId);
         if (!session) return;
         // Only the kiosk user of this session may speak as the user — blocks a
@@ -1190,11 +1209,27 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
         // 確定は**届いた順**に処理する（inOrder の説明を参照）。
         userSpeechChain = inOrder(userSpeechChain, async () => {
+          /**
+           * 分割確定の繋ぎ直し（v1.51.0・2026-08-21 英語S3/S4/S6）。
+           *
+           * 認識エンジンは1つの発話を2つに分けて確定することがある（言いよどみを文末と
+           * 誤認する。防ぐ設定は無い）。塊ごとに訳すと「is it possible to top up by just /
+           * 1,000 yen」が「チャージは、／1,000円」になり、文全体の意味が壊れて係員に
+           * 伝わらない。2つ目（continuation＝無音ゲートの判定をキオスク経由で受け取る）は
+           * **直前の発言に繋いで1つの文として訳し直し**、記録を書き換え、係員画面の
+           * 吹き出しを差し替える（replacesPrev）。直前の発言が古いときは繋がない。
+           *
+           * 繋ぐのはお客様→係員の方向だけ。係員の発言は確定のたびに読み上げが始まる
+           * ため、後から繋いでも声は取り消せない（係員は言い終わりでマイクを切る運用で
+           * 分割自体が起きにくい）。
+           */
+          const prev = continuation ? lastUserFinal(session) : null;
+          const fullText = prev ? prev.text + text : text;
           let translatedText: string | undefined;
           let translationFailed = false;
           if (lang !== "ja") {
             try {
-              translatedText = await translateWithGlossary(text, lang, "ja");
+              translatedText = await translateWithGlossary(fullText, lang, "ja");
             } catch (e) {
               console.error("[speech:user] translation error:", e);
               translationFailed = true;
@@ -1205,17 +1240,25 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
           // 確定テキストが係員画面に出る＝「お客様発話中」の役目は終わり
           setUserSpeaking(sessionId, session, false);
-          session.transcript.push({
-            id: `u-${Date.now()}-${entryCounter++}`,
-            speaker: "user",
-            text,
-            translatedText,
-            isFinal: true,
-            timestamp: Date.now(),
-            translationFailed: translationFailed || undefined,
-          });
-
-          io.to(session.staffSocketId).emit("speech:user", { sessionId, text, lang, isFinal: true, translatedText, translationFailed });
+          session.lastUserFinalAt = Date.now();
+          if (prev) {
+            prev.text = fullText;
+            prev.translatedText = translatedText;
+            prev.translationFailed = translationFailed || undefined;
+            console.log(`[speech:user] 分割確定を直前の発言に繋いで訳し直した: ${JSON.stringify(fullText.slice(0, 80))}`);
+            io.to(session.staffSocketId).emit("speech:user", { sessionId, text: fullText, lang, isFinal: true, translatedText, translationFailed, replacesPrev: true });
+          } else {
+            session.transcript.push({
+              id: `u-${Date.now()}-${entryCounter++}`,
+              speaker: "user",
+              text,
+              translatedText,
+              isFinal: true,
+              timestamp: Date.now(),
+              translationFailed: translationFailed || undefined,
+            });
+            io.to(session.staffSocketId).emit("speech:user", { sessionId, text, lang, isFinal: true, translatedText, translationFailed });
+          }
 
           // お客様側に「係員の画面に届いた」ことを返す（キオスクで既読チェックを表示する）。
           // 待っている間の不安（伝わったのか分からない）を解消するための通知。

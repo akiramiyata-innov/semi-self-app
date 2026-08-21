@@ -92,6 +92,20 @@ const STREAMING = process.env.NEXT_PUBLIC_STT_MODE === "streaming";
 let entryCounter = 0;
 function makeId() { return `s-${Date.now()}-${entryCounter++}`; }
 
+/**
+ * 直前のお客様の確定発言を差し替えた新しい一覧を返す（v1.51.0・分割確定の繋ぎ直し）。
+ * 差し替える相手が無ければ null（呼び出し元は新しい発言として足す）。
+ */
+function replaceLastUserFinal(list: TranscriptEntry[], patch: Pick<TranscriptEntry, "text" | "translatedText" | "translationFailed">): TranscriptEntry[] | null {
+  for (let i = list.length - 1; i >= 0; i--) {
+    const e = list[i];
+    if (e.speaker === "user" && e.isFinal) {
+      return list.map((x, j) => (j === i ? { ...x, ...patch } : x));
+    }
+  }
+  return null;
+}
+
 function playBeep() {
   try {
     const ctx = new AudioContext();
@@ -732,8 +746,8 @@ export default function StaffPage() {
 
     s.on(
       "speech:user",
-      (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean; translatedText?: string; translationFailed?: boolean }) => {
-        const { sessionId, text, translatedText, isFinal, translationFailed } = payload;
+      (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean; translatedText?: string; translationFailed?: boolean; replacesPrev?: boolean }) => {
+        const { sessionId, text, translatedText, isFinal, translationFailed, replacesPrev } = payload;
         if (!isFinal) {
           updateSession(sessionId, { interimUserText: text });
           return;
@@ -742,10 +756,14 @@ export default function StaffPage() {
           const next = new Map(prev);
           const session = next.get(sessionId);
           if (session) {
+            // 分割確定を繋いだ結果（replacesPrev）は、直前のお客様の吹き出しを全文と
+            // 訳し直した日本語で差し替える（v1.51.0）。相手が無いとき（画面を開き直した
+            // 直後など）は新しい発言として足す。
+            const replaced = replacesPrev ? replaceLastUserFinal(session.transcript, { text, translatedText, translationFailed }) : null;
             next.set(sessionId, {
               ...session,
               interimUserText: "",
-              transcript: [
+              transcript: replaced ?? [
                 ...session.transcript,
                 { id: makeId(), speaker: "user", text, translatedText, isFinal: true, timestamp: Date.now(), translationFailed },
               ],

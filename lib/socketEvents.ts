@@ -49,6 +49,16 @@ export interface SpeechUserPayload {
   lang: LangCode;
   isFinal: boolean;
   translatedText?: string; // Japanese translation, server-added
+  /**
+   * キオスク→サーバー（v1.51.0）: この確定は直前の自分の発言の続き（分割確定）。
+   * サーバーは直前の発言に繋いで1つの文として訳し直す。text には続きの部分だけが入る。
+   */
+  continuation?: boolean;
+  /**
+   * サーバー→係員（v1.51.0）: 直前のお客様の発言を、この内容（繋いだ全文と訳）で差し替える。
+   * 新しい吹き出しは作らない。
+   */
+  replacesPrev?: boolean;
 }
 
 export interface SpeechStaffPayload {

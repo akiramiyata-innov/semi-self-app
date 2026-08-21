@@ -495,7 +495,10 @@ export function registerSttHandlers(
           // 話していない登録語が混入した場合、それが raw の時点で入っているか（＝モデル側か
           // 後処理側か）を切り分けるためのログ。confidence は自信度ガードの調整用に常時記録。
           console.log(`[stt-diag] speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)} conf=${confidence == null ? "-" : confidence.toFixed(3)} 基準=${minConfidence}${cont} raw=${JSON.stringify(raw)} corrected=${JSON.stringify(base)} final=${JSON.stringify(transcript)}`);
-          socket.emit("stt:final", { transcript });
+          // continuation＝分割確定（同じ音声から続けて出た2つ目）の印。キオスクが
+          // 「直前の自分の発言の続き」として送り返し、サーバーが1つの文に繋いで
+          // 訳し直す（v1.51.0）。印はここで初めて付き、客側を経由して戻ってくる。
+          socket.emit("stt:final", { transcript, continuation: verdict.continuation || undefined });
           flushCollector?.(transcript); // 通話終了時の拾い上げ中なら、サーバー側でも回収する
           noteSttFinal(socket.id); // 性能測定：発話終了→確定テキスト
         }).catch((e) => { console.error("[stt] 確定の仕上げでエラー:", e); });

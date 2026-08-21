@@ -20,10 +20,20 @@ export type MicErrorCode =
   | "no-connection"       // サーバーに接続できていない
   | "unknown";            // それ以外
 
+/**
+ * 確定テキストに添える情報（v1.51.0）。
+ * continuation＝分割確定＝認識エンジンが1つの発話を2つに分けて確定したときの2つ目
+ * （サーバーの無音ゲートが判定した印）。受け手は「直前の自分の発言の続き」として扱える。
+ * ストリーミング方式以外（Edge の録音方式・Web Speech）では付かない。
+ */
+export interface SttFinalMeta {
+  continuation?: boolean;
+}
+
 interface UseSpeechRecognitionOptions {
   lang?: string;
   onInterim?: (text: string) => void;
-  onFinal?: (text: string) => void;
+  onFinal?: (text: string, meta?: SttFinalMeta) => void;
   onStop?: () => void; // Edge: 録音停止時に必ず呼ばれる（無音でも）
   /** streaming時（NEXT_PUBLIC_STT_MODE=streaming）: ライブの Socket.IO 接続を返すゲッター */
   getSocket?: () => Socket | null;
@@ -176,8 +186,8 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
     if (sttListenerSocketRef.current === socket) return;
     sttOffRef.current?.(); // 旧ソケットのリスナーを掃除（再接続時）
     const onInterim = (p: { transcript?: string }) => { if (activeRef.current) onInterimRef.current?.(p.transcript ?? ""); };
-    const onFinal = (p: { transcript?: string }) => {
-      if (p.transcript) { onInterimRef.current?.(""); onFinalRef.current?.(p.transcript); }
+    const onFinal = (p: { transcript?: string; continuation?: boolean }) => {
+      if (p.transcript) { onInterimRef.current?.(""); onFinalRef.current?.(p.transcript, { continuation: !!p.continuation }); }
     };
     const onErr = (p: { message?: string }) => {
       if (activeRef.current) { setError("unknown"); setErrorDetail(p?.message ?? null); }

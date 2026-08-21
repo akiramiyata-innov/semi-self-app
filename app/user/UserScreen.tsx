@@ -235,6 +235,13 @@ const END_WAIT_MAX_MS = 15_000;
  * 文字→音声の到着は実測1〜3.5秒（合成＋通信）なので、その4倍を取ってある。
  */
 const AVATAR_START_TIMEOUT_MS = 15_000;
+
+/**
+ * 分割確定を直前の自分の発言に繋いでよい間隔（v1.51.0）。分割確定は本来0.0秒差で
+ * 届くので、この値は「印の取り違えで古い発言に繋がないため」の保険。
+ * サーバー側（socketServer.ts の SPLIT_MERGE_WINDOW_MS）と同じ値にしておく。
+ */
+const SPLIT_MERGE_WINDOW_MS = 15_000;
 /** 音声を出せなかったとき、文字を読む時間として置く間（そのあと終了画面へ進む）。 */
 const NO_AUDIO_GRACE_MS = 3_000;
 
@@ -378,11 +385,38 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
 
   const langConfig = SUPPORTED_LANGS.find((l) => l.code === userLang);
 
+  /** 直前に確定した自分の発言（分割確定を繋ぐ相手）。通話が終わると消す。 */
+  const lastUserFinalRef = useRef<{ id: string; at: number } | null>(null);
+
+  /**
+   * 確定した自分の発言を吹き出しに置く（v1.51.0）。
+   *
+   * 分割確定（認識エンジンが1つの発話を2つに分けて確定したときの2つ目）は、
+   * 新しい吹き出しにせず**直前の自分の発言に繋ぐ**。塊ごとに訳すと文全体の意味が
+   * 壊れるため（2026-08-21 英語S3/S4/S6: 「is it possible to top up by just /
+   * 1,000 yen」→「チャージは、／1,000円」）。サーバーも同じ印を受けて、繋いだ文で
+   * 訳し直し、記録と係員画面を差し替える。直前の発言が古ければ繋がない。
+   * 返り値の clientId は、繋いだときは直前の発言のid（既読チェックの宛先が同じになる）。
+   */
+  const placeUserFinal = useCallback((text: string, continuation: boolean): { clientId: string; joined: boolean } => {
+    const prev = lastUserFinalRef.current;
+    const now = Date.now();
+    if (continuation && prev && now - prev.at < SPLIT_MERGE_WINDOW_MS) {
+      const prevId = prev.id;
+      setTranscript((list) => list.map((e) => (e.id === prevId ? { ...e, text: e.text + text } : e)));
+      lastUserFinalRef.current = { id: prevId, at: now };
+      return { clientId: prevId, joined: true };
+    }
+    const id = addEntry({ speaker: "user", text, isFinal: true });
+    lastUserFinalRef.current = { id, at: now };
+    return { clientId: id, joined: false };
+  }, [addEntry]);
+
   const { start: startMic, stop: stopMic, listening, muted: micMuted, setMuted: setMicMuted, error: micError } = useSpeechRecognition({
     lang: langConfig?.bcp47 ?? "ja-JP",
     getSocket: () => socketRef.current,
     onInterim: (text) => setInterimUser(text),
-    onFinal: (text) => {
+    onFinal: (text, meta) => {
       // Reject if recognized text matches what the avatar just said (echo)
       const avatarText = lastAvatarTextRef.current;
       if (avatarText && text.replace(/\s/g, "") === avatarText.replace(/\s/g, "")) {
@@ -390,13 +424,14 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         return;
       }
       setInterimUser("");
-      const clientId = addEntry({ speaker: "user", text, isFinal: true });
+      const { clientId, joined } = placeUserFinal(text, !!meta?.continuation);
       socketRef.current?.emit("speech:user", {
         sessionId: sessionIdRef.current,
-        text,
+        text, // 繋ぐときも送るのは続きの部分だけ（全文はサーバーの記録から組み立てる）
         lang: userLangRef.current,
         isFinal: true,
         clientId, // 係員に届いたら speech:delivered でこのidが返る
+        continuation: joined || undefined,
       });
       // Legacy paths give one final per mic session → auto-OFF after sending.
       // Streaming gives a final per pause, so keep the mic ON for continuous speech.
@@ -732,6 +767,7 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     setLangPanelOpen(false);
     langPanelOpenRef.current = false;
     setPendingLang(null);
+    lastUserFinalRef.current = null; // 前の通話の発言に分割確定を繋がない
     // 読み上げ待ちの印を次の通話へ持ち越さない
     speechPendingRef.current = false;
     avatarSpeakingRef.current = false;
