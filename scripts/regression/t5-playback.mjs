@@ -26,6 +26,12 @@ try {
 
   const micLogs = () => page.console.filter((l) => l.text.startsWith("[mic]")).map((l) => l.text);
 
+  // アバターの瞬き（v1.56.0）: 数秒に1回、目を閉じた瞬間が来る（data-blink="1"）。8秒見張る
+  let blinked = false;
+  for (let i = 0; i < 130 && !blinked; i++) { await sleep(60); blinked = await page.js(`!!document.querySelector('[data-blink="1"]')`); }
+  c.check("アバターが瞬きする（8秒以内に目を閉じる瞬間がある）", blinked, "");
+  c.check("アバターの目（開・閉）と土台の画像が読み込まれている", await page.js(`[...document.querySelectorAll('img[src*="/avatar/"]')].filter(i=>/base|eye-open|eye-close/.test(i.src)).every(i=>i.complete && i.naturalWidth>0)`), "");
+
   // ① 3分割の返答（S5の形）。#1と#2はほぼ同時、#3は約4秒後
   const micButtonText = () => page.js(`[...document.querySelectorAll('button')].map(b=>b.textContent).find(t=>/Mic (ON|OFF|paused)/.test(t)) ?? ''`);
   // お知らせは2行で出る（改行入り）ので、空白をならしてから探す

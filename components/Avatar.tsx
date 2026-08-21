@@ -38,26 +38,48 @@ interface AvatarProps {
 /** Height in px. Width follows from the artwork's aspect ratio. */
 const SIZE_MAP = { sm: 220, md: 380, lg: 560, xl: 860 };
 
-// base.svg's viewBox. The mouth artwork uses the same units, so mouth placement
-// is expressed as a percentage of these dimensions.
-const BASE_W = 805.1;
-const BASE_H = 1448;
+// base.svg's viewBox. The eye and mouth artwork is placed as a percentage of these
+// dimensions.
+//
+// ★v1.56.0（2026-08-22）: 土台を 8/18 書き出しの base_women.svg（1024×1536）に差し替えた。
+// 新しい土台は**目が描かれておらず**、目は eye-open / eye-close の2枚を重ねて出す
+// （瞬きのため）。旧土台（805.1×1448）とは絵の大きさも位置も違うので、口の位置は
+// 両方の絵の「白目の重心」を機械的に測って写し直した:
+//   旧 両目の中心 (391, 495)・間隔 200  →  新 (510, 506)・間隔 237  ＝ 拡大率 1.18
+//   旧の口 (406, 600) → 新 (512, 630)。口の絵の幅も 1.18 倍。
+//   目視で鼻との間がやや詰まって見えたため、上端を 10 だけ下げて 640 にした。
+const BASE_W = 1024;
+const BASE_H = 1536;
 
 /** Mouth anchor on the face, in base.svg units (centre-x, top edge of the lips). */
-const MOUTH_CENTER_X = 406;
-const MOUTH_TOP_Y = 600;
+const MOUTH_CENTER_X = 512;
+const MOUTH_TOP_Y = 640;
 
 type MouthShape = "closed" | "a" | "i" | "u" | "e" | "o";
 
-/** Each mouth SVG's own viewBox width, in the same units as base.svg. */
+/**
+ * Each mouth SVG's own viewBox width, in base.svg units. The mouth SVGs were drawn for
+ * the old base (805.1 wide); on the new base the face is 1.18× larger, so the widths
+ * are scaled by the same factor (old: closed 86.2 / a 77 / i 94.3 / u 36.9 / e 79.9 / o 41).
+ */
+const MOUTH_SCALE = 1.18;
 const MOUTH_WIDTH: Record<MouthShape, number> = {
-  closed: 86.2,
-  a: 77,
-  i: 94.3,
-  u: 36.9,
-  e: 79.9,
-  o: 41,
+  closed: 86.2 * MOUTH_SCALE,
+  a: 77 * MOUTH_SCALE,
+  i: 94.3 * MOUTH_SCALE,
+  u: 36.9 * MOUTH_SCALE,
+  e: 79.9 * MOUTH_SCALE,
+  o: 41 * MOUTH_SCALE,
 };
+
+/**
+ * 瞬き（v1.56.0）。人は数秒に1回まばたきする。間隔はばらつかせ（同じ周期だと機械的に
+ * 見える）、たまに2回続けて閉じる。閉じている時間は約0.14秒。
+ */
+const BLINK_MIN_INTERVAL_MS = 2_500;
+const BLINK_MAX_INTERVAL_MS = 6_000;
+const BLINK_CLOSED_MS = 140;
+const BLINK_DOUBLE_RATE = 0.2;
 
 const MOUTH_SHAPES = Object.keys(MOUTH_WIDTH) as MouthShape[];
 
@@ -94,6 +116,38 @@ export function Avatar({
 }: AvatarProps) {
   const [entered, setEntered] = useState(false);
   const [mouth, setMouth] = useState<MouthShape>("closed");
+  /** 目を閉じているか（瞬きの一瞬だけ true）。 */
+  const [blink, setBlink] = useState(false);
+
+  // 瞬き: 次の瞬きまでの時間をその都度ランダムに決めて予約する。画面から外れたら止める。
+  useEffect(() => {
+    if (!visible) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let alive = true;
+    const schedule = () => {
+      const wait = BLINK_MIN_INTERVAL_MS + Math.random() * (BLINK_MAX_INTERVAL_MS - BLINK_MIN_INTERVAL_MS);
+      timer = setTimeout(() => {
+        if (!alive) return;
+        setBlink(true);
+        timer = setTimeout(() => {
+          if (!alive) return;
+          setBlink(false);
+          if (Math.random() < BLINK_DOUBLE_RATE) {
+            // 2回続けて閉じる
+            timer = setTimeout(() => {
+              if (!alive) return;
+              setBlink(true);
+              timer = setTimeout(() => { if (!alive) return; setBlink(false); schedule(); }, BLINK_CLOSED_MS);
+            }, 180);
+          } else {
+            schedule();
+          }
+        }, BLINK_CLOSED_MS);
+      }, wait);
+    };
+    schedule();
+    return () => { alive = false; if (timer) clearTimeout(timer); };
+  }, [visible]);
   // The currently-playing Google TTS node, kept so we can stop it if the call
   // ends mid-sentence (otherwise the voice plays on after the screen closes).
   const sourceRef = useRef<AudioBufferSourceNode | null>(null);
@@ -302,8 +356,9 @@ export function Avatar({
   return (
     <div className="flex flex-col items-center justify-end gap-3 h-full min-h-0">
       <div
-        className={`${containerClass} relative min-h-0 flex-1 w-auto`}
+        className={`${containerClass} relative min-h-0 flex-1 w-auto avatar-sway`}
         style={{ maxHeight: height, aspectRatio: `${BASE_W} / ${BASE_H}` }}
+        data-blink={blink ? "1" : "0"}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -311,6 +366,26 @@ export function Avatar({
           alt="駅員アバター"
           className="w-full h-full select-none"
           draggable={false}
+        />
+        {/* 目（v1.56.0）。土台には目が無く、開いた目と閉じた目を同じ大きさで重ねて
+            opacity で切り替える（瞬き）。2枚とも土台と同じ viewBox なので位置合わせは不要。 */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/avatar/eye-open.svg"
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          className="absolute inset-0 w-full h-full select-none"
+          style={{ opacity: blink ? 0 : 1 }}
+        />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/avatar/eye-close.svg"
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          className="absolute inset-0 w-full h-full select-none"
+          style={{ opacity: blink ? 1 : 0 }}
         />
         {/* All mouth shapes are stacked and cross-fade via opacity, so shape
             changes ease in/out instead of snapping between images. */}
