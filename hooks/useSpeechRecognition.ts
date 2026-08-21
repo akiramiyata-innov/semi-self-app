@@ -108,6 +108,9 @@ export function useSpeechRecognition({ lang = "ja-JP", onInterim, onFinal, onSto
   const sttMutedRef = useRef(false);
   const [muted, setMutedState] = useState(false);
   const setMuted = useCallback((m: boolean) => {
+    // 変わり目だけコンソールに残す（v1.50.0）。「お客様の声が届かない」調査で
+    // 一時停止が戻っていないことを端末側で確かめられるように（英語S5の52秒無音）。
+    if (sttMutedRef.current !== m) console.log(`[mic] ${m ? "一時停止（無音を送る）" : "再開"}`);
     sttMutedRef.current = m;
     setMutedState(m);
   }, []);

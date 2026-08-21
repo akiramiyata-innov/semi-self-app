@@ -229,6 +229,12 @@ const AVATAR_TAIL_MS = 500;
  * 通常の読み上げがこの上限に当たることはない。
  */
 const END_WAIT_MAX_MS = 15_000;
+
+/**
+ * 「読み上げ待ちなのに何も鳴り始めない」を異常とみなすまでの時間（v1.50.0）。
+ * 文字→音声の到着は実測1〜3.5秒（合成＋通信）なので、その4倍を取ってある。
+ */
+const AVATAR_START_TIMEOUT_MS = 15_000;
 /** 音声を出せなかったとき、文字を読む時間として置く間（そのあと終了画面へ進む）。 */
 const NO_AUDIO_GRACE_MS = 3_000;
 
@@ -755,6 +761,29 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     }, ms);
   }, []);
 
+  /**
+   * 音声が始まらないままのときの見張り（v1.50.0・2026-08-21 英語S5）。
+   *
+   * 読み上げ待ち（speechPending）とマイクの一時停止は、アバターの再生が終わった
+   * ときに解除される。つまり**一度も鳴り始めなければ誰も解除しない**。実測では
+   * 音声が1つも鳴らないまま一時停止だけが残り、次に係員が話すまでの52秒間
+   * お客様の声が届かなかった（英語S5）。取りこぼしの原因そのもの（確定受信時の
+   * 音声破棄）は修正済みだが、音を鳴らせない端末・変換の失敗など**同じ形に落ちる
+   * 経路は他にもある**ため、どの経路でも一定時間で復帰する保険を置く。
+   *
+   * 係員の確定を受けるたびに数え直す。時間が来ても ①読み上げ待ちのまま
+   * ②何も鳴っていない なら、再生失敗と同じ後始末（文字を出す・係員へ知らせる・
+   * マイクを戻す）をする。前の返答を読み上げ中なら、もう一巡だけ待ち直す。
+   * 読み上げが普通に終われば speechPending が倒れ、見張りは何もしない。
+   * 判定の本体は playbackCheckRef（handlePlaybackError の近くで定義）。
+   */
+  const playbackWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const playbackCheckRef = useRef<() => void>(() => {});
+  const armPlaybackWatchdog = useCallback(() => {
+    if (playbackWatchdogRef.current) clearTimeout(playbackWatchdogRef.current);
+    playbackWatchdogRef.current = setTimeout(() => playbackCheckRef.current(), AVATAR_START_TIMEOUT_MS);
+  }, []);
+
   // Socket.IO setup
   useEffect(() => {
     const s = io({ path: "/socket.io", transports: ["websocket", "polling"] });
@@ -933,7 +962,21 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
         // これから読み上げが来る（＝音声が出せなかった場合を除く）。通話終了が
         // 押されても、読み上げ終わりまで画面を切り替えないための印。
         speechPendingRef.current = !payload.forceShowText;
-        // 音声が来る予定＝読み上げが終わるまで「続きあり」にしておく
+        // 音声が来る予定＝読み上げが終わるまで「続きあり」にしておく。
+        //
+        // ★v1.50.0（2026-08-21 英語S5）: 従来はこの直後に
+        //   `audioQueueRef.current = []; setMoreAudioComing(false);`（前の返答の残りを
+        //   捨てる）があり、2つの実害を生んでいた。
+        //   ①「続きあり」を立てた直後に必ず倒す＝目印が死んでいて、文ごとに届く音声の
+        //     間が空くと読み上げ終了と誤判定する（v1.43.0 の保護が効いていなかった）
+        //   ②発話が2つ以上の確定に分かれて届くと（分割確定）、次の確定が**前の確定の
+        //     届いたばかりの音声を捨てる**。画面共有などで描画が重いときに起こりやすく、
+        //     音声が1つも鳴らないままマイクの一時停止だけが残り、実測52秒お客様の声が
+        //     届かなかった（英語S5）。
+        //   捨てなくても混ざらない: サーバーは確定を1件ずつ順に処理する（v1.49.0）ので、
+        //   この時点で残っている音声は前の返答の**まだ鳴らしていない続き**であり、
+        //   先に鳴らしきってから新しい返答へ進むのが正しい。通話の切り替わり時の
+        //   片付けは resetCallState と再接続時の処理が引き続き行う。
         setMoreAudioComing(!payload.forceShowText);
         if (payload.forceShowText) {
           // 音声が無いので読み上げ終了の合図は来ない。文字を読む間だけ置いて進める。
@@ -943,13 +986,15 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
             setTimeout(pending, NO_AUDIO_GRACE_MS);
           }
         }
-        audioQueueRef.current = []; setMoreAudioComing(false); // 前の返答の残りを捨てる
         lastAvatarTextRef.current = payload.text;
         if (STREAMING_STT) {
           // 常時ON方式: マイクは切らず、読み上げの間だけ一時停止（無音を送る）。
           // 読み上げ本体より先にこの確定が届くので、鳴り始める前に確実に止められる。
           // 音声が出せない発言(forceShowText)は再生が無いので止めない。
-          if (!payload.forceShowText) setMicMuted(true);
+          if (!payload.forceShowText) {
+            setMicMuted(true);
+            armPlaybackWatchdog();
+          }
         } else {
           // 旧方式: 係員の発話でマイクOFF（お客様がボタンで再開する）
           stopMic();
@@ -1113,6 +1158,23 @@ export function UserScreen({ machineId, machineName, stationId = "", line, stati
     // 読み上げは行われない。終わったときと同じ後始末をする（マイクの再開・通話終了の続行）。
     notifyAvatarSpeaking(false);
   }, [notifyAvatarSpeaking]);
+
+  useEffect(() => {
+    // 音声の見張り（v1.50.0）の本体＝時間切れの判定。仕組みの説明は armPlaybackWatchdog の
+    // 定義（上のほう）にある。宣言順の都合で ref に入れる＝armPlaybackWatchdog は
+    // ソケット処理（この関数より前に定義）から呼ばれるため、そこで直接この関数を参照できない。
+    playbackCheckRef.current = () => {
+      playbackWatchdogRef.current = null;
+      if (!speechPendingRef.current) return; // 何ごともなく読み上げは終わっている
+      if (avatarSpeakingRef.current) {       // 鳴っている最中＝異常ではない。待ち直す
+        armPlaybackWatchdog();
+        return;
+      }
+      console.error("[avatar] 読み上げが始まらないまま時間切れ。マイクを復帰させる");
+      handlePlaybackError();
+    };
+  }, [armPlaybackWatchdog, handlePlaybackError]);
+  useEffect(() => () => { if (playbackWatchdogRef.current) clearTimeout(playbackWatchdogRef.current); }, []);
 
   const errMsg = ERR[userLang] ?? ERR.ja;
   const ui = UI_TEXT[userLang] ?? UI_TEXT.ja;
