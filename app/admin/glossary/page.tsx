@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Trash2, BookPlus, Upload } from "lucide-react";
+import { Trash2, BookPlus, Upload, Pencil } from "lucide-react";
 import * as XLSX from "xlsx";
 import type { GlossaryTerm } from "@/lib/types";
 
@@ -29,6 +29,9 @@ export default function GlossaryPage() {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ text: string; ok: boolean } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  /** 編集中の用語の id（null なら新規追加）。同じ入力欄を追加と編集で使い回す（v1.54.0）。 */
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const fetchTerms = async () => {
     const res = await fetch("/api/admin/glossary");
@@ -41,24 +44,46 @@ export default function GlossaryPage() {
 
   useEffect(() => { fetchTerms(); }, []);
 
-  const addTerm = async (e: React.FormEvent) => {
+  /** 追加（POST）と編集（PUT）を同じ入力欄から送る。 */
+  const submitTerm = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     setFormError("");
-    const res = await fetch("/api/admin/glossary", {
-      method: "POST",
+    const res = await fetch(editingId ? `/api/admin/glossary/${editingId}` : "/api/admin/glossary", {
+      method: editingId ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(form),
     });
     if (res.ok) {
       setForm(EMPTY_FORM);
       setShowForm(false);
+      setEditingId(null);
       await fetchTerms();
     } else {
       const data = await res.json();
-      setFormError(data.error ?? "追加に失敗しました");
+      setFormError(data.error ?? (editingId ? "更新に失敗しました" : "追加に失敗しました"));
     }
     setSaving(false);
+  };
+
+  /** 既存の用語を入力欄に読み込んで編集モードにする（v1.54.0）。 */
+  const startEdit = (term: GlossaryTerm) => {
+    setEditingId(term.id);
+    setForm({
+      ja: term.ja, yomi: term.yomi ?? "", en: term.en ?? "", zh: term.zh ?? "", "zh-TW": term["zh-TW"] ?? "",
+      ko: term.ko ?? "", fr: term.fr ?? "", es: term.es ?? "", th: term.th ?? "",
+    });
+    setFormError("");
+    setShowForm(true);
+    // 入力欄は一覧の下にあるので、見える位置まで送る
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+  };
+
+  const cancelForm = () => {
+    setShowForm(false);
+    setFormError("");
+    setForm(EMPTY_FORM);
+    setEditingId(null);
   };
 
   const deleteTerm = async (id: string, label: string) => {
@@ -181,12 +206,12 @@ export default function GlossaryPage() {
                   {LANG_LABELS.map((l) => (
                     <th key={l.key} className="text-left px-3 py-3 font-medium text-gray-600">{l.label}</th>
                   ))}
-                  <th className="w-10" />
+                  <th className="w-20" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {terms.map((term) => (
-                  <tr key={term.id} className="hover:bg-gray-50">
+                  <tr key={term.id} className={term.id === editingId ? "bg-blue-50" : "hover:bg-gray-50"}>
                     <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">{term.ja}</td>
                     <td className="px-3 py-3 text-gray-500 whitespace-nowrap">
                       {term.yomi || <span className="text-gray-300">—</span>}
@@ -196,7 +221,14 @@ export default function GlossaryPage() {
                         {term[l.key] || <span className="text-gray-300">—</span>}
                       </td>
                     ))}
-                    <td className="px-3 py-3">
+                    <td className="px-3 py-3 whitespace-nowrap">
+                      <button
+                        onClick={() => startEdit(term)}
+                        className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
+                        title="編集"
+                      >
+                        <Pencil size={15} />
+                      </button>
                       <button
                         onClick={() => deleteTerm(term.id, term.ja)}
                         className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
@@ -251,10 +283,15 @@ export default function GlossaryPage() {
 
         {showForm && (
           <form
-            onSubmit={addTerm}
-            className="bg-white rounded-xl shadow-sm border border-gray-200 p-5"
+            ref={formRef}
+            onSubmit={submitTerm}
+            className={`bg-white rounded-xl shadow-sm border p-5 ${editingId ? "border-blue-300 ring-2 ring-blue-100" : "border-gray-200"}`}
           >
-            <h2 className="text-base font-semibold text-gray-900 mb-4">新規用語追加</h2>
+            <h2 className="text-base font-semibold text-gray-900 mb-4">
+              {editingId
+                ? <>用語を編集：「{terms.find((t) => t.id === editingId)?.ja ?? ""}」<span className="ml-2 text-xs font-normal text-gray-500">保存すると、翻訳と音声認識にすぐ反映されます</span></>
+                : "新規用語追加"}
+            </h2>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -306,11 +343,11 @@ export default function GlossaryPage() {
                 disabled={saving}
                 className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
               >
-                {saving ? "追加中..." : "追加する"}
+                {editingId ? (saving ? "保存中..." : "保存する") : (saving ? "追加中..." : "追加する")}
               </button>
               <button
                 type="button"
-                onClick={() => { setShowForm(false); setFormError(""); setForm(EMPTY_FORM); }}
+                onClick={cancelForm}
                 className="px-4 py-2 text-gray-600 border border-gray-300 text-sm rounded-lg hover:bg-gray-50 transition-colors"
               >
                 キャンセル

@@ -22,6 +22,7 @@ const TESTS = [
   { file: "t2-order.mjs", browser: false, what: "v1.49.0 分割確定の追い越し" },
   { file: "t3-merge.mjs", browser: false, what: "v1.51.0 分割確定の繋ぎ直し" },
   { file: "t6-ordering.mjs", browser: false, what: "v1.52.0 話し始めの順と確定前の返答の印" },
+  { file: "t7-glossary.mjs", browser: false, what: "v1.54.0 用語集の編集（PUT）" },
   { file: "t4-staffui.mjs", browser: true, what: "v1.51/52 係員画面（差し替え・差し込み・印）" },
   { file: "t5-playback.mjs", browser: true, what: "v1.50.0 読み上げ不発とマイク復帰" },
 ];
