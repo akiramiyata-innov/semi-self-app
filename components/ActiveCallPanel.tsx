@@ -208,16 +208,8 @@ export function ActiveCallPanel({
             </span>
           )}
 
-          {/* お客様の画面にテキストが出ているか。係員の画面には常に出ているので、
-              見えている前提で「画面をご覧ください」と言ってしまわないための表示。 */}
-          <span
-            className={`flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${
-              textVisible ? "bg-sky-600 text-white" : "bg-gray-500 text-white"
-            }`}
-          >
-            {textVisible ? <MessageSquareText size={11} /> : <MessageSquareOff size={11} />}
-            {textVisible ? "お客様にテキスト表示中" : "お客様にはテキスト非表示"}
-          </span>
+          {/* ※「お客様にテキスト表示中／非表示」の札は v1.58.0 で削除した（ユーザー指示）。
+              右のボタン列の「お客様画面テキスト ON/OFF」と同じ情報で、二重に出ていたため。 */}
         </div>
 
         {/* ★2件同時のように幅が狭いときは、ボタンを縮めずに次の行へ折り返す。
