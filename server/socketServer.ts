@@ -811,6 +811,27 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
   io.on("connection", (socket: Socket) => {
 
+    /**
+     * 確定した発言を「届いた順」に処理するための待ち行列（v1.49.0・2026-08-21）。
+     *
+     * ★確定した発言は翻訳を待ってから記録・表示する。翻訳にかかる時間は文の長さで
+     *   変わるため、**短い文が長い文を追い越す**。ひとつの発話が2つに分かれて確定
+     *   したとき（認識エンジンが言いよどみを文末と誤認する「分割確定」）、短い後半が
+     *   先に表示され、会話の順番が入れ替わっていた。
+     *
+     *   実測（2026-08-21 基本性能テスト 英語S3）:
+     *     80.9秒 お客様「 1,000 yen」                       ← 後半が先
+     *     81.1秒 お客様「 is it possible to top up by just」 ← 前半が後
+     *
+     *   話し手ごとに1本の列に並べ、**前の1件が終わってから次を処理する**。
+     *   途中経過（書きかけ）は待たせない——翻訳しないので追い越しは起きず、
+     *   確定の翻訳待ちに巻き込むと画面の反応が鈍くなるため。
+     */
+    let userSpeechChain: Promise<void> = Promise.resolve();
+    let staffSpeechChain: Promise<void> = Promise.resolve();
+    const inOrder = (chain: Promise<void>, job: () => Promise<void>): Promise<void> =>
+      chain.then(job).catch((e) => { console.error("[speech] 発言の処理でエラー:", e); });
+
     // ── Streaming STT (real-time, glossary-aware, long-form) ──────────────────
     // 音量から「お客様が話している」ことを検知したら係員画面に知らせる。マイクのON/OFF
     // ではなく実際の声で判定するので、将来キオスクのマイクを常時ONにしても そのまま動く。
@@ -1151,7 +1172,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     // ── Speech: user → staff ──────────────────────────────────────────────────
     socket.on(
       "speech:user",
-      async (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean; clientId?: string }) => {
+      (payload: { sessionId: string; text: string; lang: LangCode; isFinal: boolean; clientId?: string }) => {
         const { sessionId, text, lang, isFinal, clientId } = payload;
         const session = activeSessions.get(sessionId);
         if (!session) return;
@@ -1161,20 +1182,27 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
 
         if (lang !== session.userLang) session.userLang = lang;
 
-        let translatedText: string | undefined;
-        let translationFailed = false;
-        if (isFinal && lang !== "ja") {
-          try {
-            translatedText = await translateWithGlossary(text, lang, "ja");
-          } catch (e) {
-            console.error("[speech:user] translation error:", e);
-            translationFailed = true;
-            recordAppError({ type: "translate", sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), side: "user", detail: `お客様の発言を翻訳できなかった（${lang}→日本語）: ${String(e).slice(0, 120)}` });
-            io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "userToJa" });
-          }
+        // 途中経過（書きかけ）は翻訳しないので、待たせずそのまま流す。
+        if (!isFinal) {
+          io.to(session.staffSocketId).emit("speech:user", { sessionId, text, lang, isFinal: false });
+          return;
         }
 
-        if (isFinal) {
+        // 確定は**届いた順**に処理する（inOrder の説明を参照）。
+        userSpeechChain = inOrder(userSpeechChain, async () => {
+          let translatedText: string | undefined;
+          let translationFailed = false;
+          if (lang !== "ja") {
+            try {
+              translatedText = await translateWithGlossary(text, lang, "ja");
+            } catch (e) {
+              console.error("[speech:user] translation error:", e);
+              translationFailed = true;
+              recordAppError({ type: "translate", sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), side: "user", detail: `お客様の発言を翻訳できなかった（${lang}→日本語）: ${String(e).slice(0, 120)}` });
+              io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "userToJa" });
+            }
+          }
+
           // 確定テキストが係員画面に出る＝「お客様発話中」の役目は終わり
           setUserSpeaking(sessionId, session, false);
           session.transcript.push({
@@ -1186,15 +1214,15 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
             timestamp: Date.now(),
             translationFailed: translationFailed || undefined,
           });
-        }
 
-        io.to(session.staffSocketId).emit("speech:user", { sessionId, text, lang, isFinal, translatedText, translationFailed });
+          io.to(session.staffSocketId).emit("speech:user", { sessionId, text, lang, isFinal: true, translatedText, translationFailed });
 
-        // お客様側に「係員の画面に届いた」ことを返す（キオスクで既読チェックを表示する）。
-        // 待っている間の不安（伝わったのか分からない）を解消するための通知。
-        if (isFinal && clientId) {
-          io.to(session.userSocketId).emit("speech:delivered", { sessionId, clientId });
-        }
+          // お客様側に「係員の画面に届いた」ことを返す（キオスクで既読チェックを表示する）。
+          // 待っている間の不安（伝わったのか分からない）を解消するための通知。
+          if (clientId) {
+            io.to(session.userSocketId).emit("speech:delivered", { sessionId, clientId });
+          }
+        });
       }
     );
 
@@ -1256,7 +1284,7 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
     // ── Speech: staff → user ──────────────────────────────────────────────────
     socket.on(
       "speech:staff",
-      async (payload: { sessionId: string; text: string; isFinal: boolean; clientId?: string }) => {
+      (payload: { sessionId: string; text: string; isFinal: boolean; clientId?: string }) => {
         const { sessionId, text, isFinal, clientId } = payload;
         const session = activeSessions.get(sessionId);
         if (!session) return;
@@ -1287,99 +1315,103 @@ export function initSocketServer(httpServer: HttpServer<typeof IncomingMessage, 
           return;
         }
 
-        let translationFailed = false;
-        // 翻訳と読み上げには、つなぎ言葉を落とし記号を読みに直した文を使う。
-        // 係員画面の表示と通話ログは原文（text）のままなので、係員が言ったことは残る。
-        const spoken = toSpokenText(text);
-        let speakText: string;
-        if (userLang !== "ja") {
-          try {
-            translatedText = await translateWithGlossary(spoken, "ja", userLang);
-          } catch (e) {
-            console.error("[speech:staff] translation error:", e);
-            translationFailed = true;
-            recordAppError({ type: "translate", sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), side: "staff", detail: `係員の発言を翻訳できなかった（日本語→${userLang}）: ${String(e).slice(0, 120)}` });
-            io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "jaToUser" });
-            translatedText = text; // fallback: send Japanese text as-is
+        // 確定は**届いた順**に処理する（このファイル冒頭の inOrder の説明を参照）。
+        // 分割確定の後半が前半を追い越すと、会話の順番が入れ替わって表示・読み上げされる。
+        staffSpeechChain = inOrder(staffSpeechChain, async () => {
+          let translationFailed = false;
+          // 翻訳と読み上げには、つなぎ言葉を落とし記号を読みに直した文を使う。
+          // 係員画面の表示と通話ログは原文（text）のままなので、係員が言ったことは残る。
+          const spoken = toSpokenText(text);
+          let speakText: string;
+          if (userLang !== "ja") {
+            try {
+              translatedText = await translateWithGlossary(spoken, "ja", userLang);
+            } catch (e) {
+              console.error("[speech:staff] translation error:", e);
+              translationFailed = true;
+              recordAppError({ type: "translate", sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), side: "staff", detail: `係員の発言を翻訳できなかった（日本語→${userLang}）: ${String(e).slice(0, 120)}` });
+              io.to(session.staffSocketId).emit("error:translation", { sessionId, direction: "jaToUser" });
+              translatedText = text; // fallback: send Japanese text as-is
+            }
+            speakText = translatedText!;
+          } else {
+            translatedText = text;
+            // 表示は text（登録どおりの SUICA）のまま、音声には読み（すいか）を渡す
+            speakText = await toSpeakableJa(spoken);
           }
-          speakText = translatedText!;
-        } else {
-          translatedText = text;
-          // 表示は text（登録どおりの SUICA）のまま、音声には読み（すいか）を渡す
-          speakText = await toSpeakableJa(spoken);
-        }
 
-        /**
-         * お客様への文字は「音声より先に、1回だけ」送る（C-2）。
-         *
-         * ★順番が重要: キオスクはこの確定を受けてマイクを一時停止する。音声が先に
-         * 着くと、アバターの声を自分のマイクが拾ってしまう。1文目ができた時点で
-         * 送るので、従来（全文の合成を待ってから送る）より早く届く。
-         */
-        let userTextSent = false;
-        const sendUserText = (forceShowText: boolean) => {
-          if (userTextSent) return;
-          userTextSent = true;
-          io.to(session.userSocketId).emit("speech:staff", {
-            sessionId, text: translatedText, isFinal: true, forceShowText,
+          /**
+           * お客様への文字は「音声より先に、1回だけ」送る（C-2）。
+           *
+           * ★順番が重要: キオスクはこの確定を受けてマイクを一時停止する。音声が先に
+           * 着くと、アバターの声を自分のマイクが拾ってしまう。1文目ができた時点で
+           * 送るので、従来（全文の合成を待ってから送る）より早く届く。
+           */
+          let userTextSent = false;
+          const sendUserText = (forceShowText: boolean) => {
+            if (userTextSent) return;
+            userTextSent = true;
+            io.to(session.userSocketId).emit("speech:staff", {
+              sessionId, text: translatedText, isFinal: true, forceShowText,
+            });
+          };
+
+          /**
+           * ★文字は「翻訳が終わった時点」で送る（対策10・2026-08-20）。
+           *
+           * 以前は1つ目の音声ができるのを待ってから送っていたため、音声合成の時間ぶん
+           * お客様が読み始めるのが遅れていた（実測で約0.8〜1.2秒）。翻訳さえ終われば
+           * 文字は出せるので、合成を待つ理由がない。
+           * 「文字が音声より先に届く」という元の決まりは保たれる（むしろ差が広がる）。
+           */
+          sendUserText(false);
+          const tts = await synthesizeAndStream(speakText, userLang, (audio, index) => {
+            if (index === 0) {
+              metrics.noteTtsSent(sessionId); // 測定は「1文目が出せた時刻」＝実際に声が始まる時刻
+            }
+            io.to(session.userSocketId).emit("tts:audio", { sessionId, audioBase64: audio, lang: userLang });
           });
-        };
+          // ★「この返答の音声はこれで全部」の合図。
+          //   文ごとに送るようになったため、キオスクは1つ目を鳴らし終えた時点では
+          //   まだ続きが来るのかどうか分からない。これが無いと、2つ目が間に合わなかった
+          //   ときに読み上げ終了と誤判定し、**お客様のマイクが返答の途中で戻る**／
+          //   **待たせていた通話終了が先に進んでしまう**。
+          io.to(session.userSocketId).emit("tts:done", { sessionId });
 
-        /**
-         * ★文字は「翻訳が終わった時点」で送る（対策10・2026-08-20）。
-         *
-         * 以前は1つ目の音声ができるのを待ってから送っていたため、音声合成の時間ぶん
-         * お客様が読み始めるのが遅れていた（実測で約0.8〜1.2秒）。翻訳さえ終われば
-         * 文字は出せるので、合成を待つ理由がない。
-         * 「文字が音声より先に届く」という元の決まりは保たれる（むしろ差が広がる）。
-         */
-        sendUserText(false);
-        const tts = await synthesizeAndStream(speakText, userLang, (audio, index) => {
-          if (index === 0) {
-            metrics.noteTtsSent(sessionId); // 測定は「1文目が出せた時刻」＝実際に声が始まる時刻
+          // 係員画面には日本語の原文に加えて訳文も返す。clientId は係員側が先に表示した
+          // 吹き出しを特定するための目印（同じ文言を続けて話しても取り違えない）。
+          io.to(session.staffSocketId).emit("speech:staff", {
+            sessionId, text, isFinal: true, clientId,
+            translatedText: userLang !== "ja" ? translatedText : undefined,
+            // 4秒で消えるトーストを見逃しても分かるよう、発言そのものに印を残す。
+            translationFailed, voiceFailed: !tts.ok,
+          });
+
+          // 係員は自分の発言が普通に表示されるため、音声が届かなかったことに気づけない。
+          // 言い直せるように知らせる。partial=途中が抜けた音声が再生された場合。
+          if (!tts.ok) {
+            const partial = tts.sent > 0;
+            // 音声が欠けたときは、お客様の画面にも文字を出す。文字は音声より先に
+            // 送ってしまっているので、あとから「この発言は文字も出して」と伝える。
+            // ★音声がゼロの場合も送る（以前は partial のときだけで、音声ゼロのときは
+            //   sendUserText(true) に頼っていた。文字を先に送るようにしたことで
+            //   その経路が働かなくなるため、ここで必ず知らせる）。
+            io.to(session.userSocketId).emit("tts:incomplete", { sessionId, partial });
+            io.to(session.staffSocketId).emit("error:tts", { sessionId, partial, reason: "synthesis" });
+            console.error(`[tts] 音声を届けられなかった session=${sessionId} partial=${partial} ${tts.sent}/${tts.total}`);
+            recordAppError({ type: "tts-synthesis", sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), side: "staff", detail: `${partial ? "一部の" : ""}音声を合成できず文字のみ表示: ${text.slice(0, 60)}` });
           }
-          io.to(session.userSocketId).emit("tts:audio", { sessionId, audioBase64: audio, lang: userLang });
-        });
-        // ★「この返答の音声はこれで全部」の合図。
-        //   文ごとに送るようになったため、キオスクは1つ目を鳴らし終えた時点では
-        //   まだ続きが来るのかどうか分からない。これが無いと、2つ目が間に合わなかった
-        //   ときに読み上げ終了と誤判定し、**お客様のマイクが返答の途中で戻る**／
-        //   **待たせていた通話終了が先に進んでしまう**。
-        io.to(session.userSocketId).emit("tts:done", { sessionId });
 
-        // 係員画面には日本語の原文に加えて訳文も返す。clientId は係員側が先に表示した
-        // 吹き出しを特定するための目印（同じ文言を続けて話しても取り違えない）。
-        io.to(session.staffSocketId).emit("speech:staff", {
-          sessionId, text, isFinal: true, clientId,
-          translatedText: userLang !== "ja" ? translatedText : undefined,
-          // 4秒で消えるトーストを見逃しても分かるよう、発言そのものに印を残す。
-          translationFailed, voiceFailed: !tts.ok,
-        });
-
-        // 係員は自分の発言が普通に表示されるため、音声が届かなかったことに気づけない。
-        // 言い直せるように知らせる。partial=途中が抜けた音声が再生された場合。
-        if (!tts.ok) {
-          const partial = tts.sent > 0;
-          // 音声が欠けたときは、お客様の画面にも文字を出す。文字は音声より先に
-          // 送ってしまっているので、あとから「この発言は文字も出して」と伝える。
-          // ★音声がゼロの場合も送る（以前は partial のときだけで、音声ゼロのときは
-          //   sendUserText(true) に頼っていた。文字を先に送るようにしたことで
-          //   その経路が働かなくなるため、ここで必ず知らせる）。
-          io.to(session.userSocketId).emit("tts:incomplete", { sessionId, partial });
-          io.to(session.staffSocketId).emit("error:tts", { sessionId, partial, reason: "synthesis" });
-          console.error(`[tts] 音声を届けられなかった session=${sessionId} partial=${partial} ${tts.sent}/${tts.total}`);
-          recordAppError({ type: "tts-synthesis", sessionId, machineName: session.machineName, staffName: staffNameOfSession(session), side: "staff", detail: `${partial ? "一部の" : ""}音声を合成できず文字のみ表示: ${text.slice(0, 60)}` });
-        }
-
-        session.transcript.push({
-          id: `s-${Date.now()}-${entryCounter++}`,
-          speaker: "staff",
-          text,
-          translatedText: userLang !== "ja" ? translatedText : undefined,
-          isFinal: true,
-          timestamp: Date.now(),
-          translationFailed: translationFailed || undefined,
-          voiceFailed: !tts.ok || undefined,
+          session.transcript.push({
+            id: `s-${Date.now()}-${entryCounter++}`,
+            speaker: "staff",
+            text,
+            translatedText: userLang !== "ja" ? translatedText : undefined,
+            isFinal: true,
+            timestamp: Date.now(),
+            translationFailed: translationFailed || undefined,
+            voiceFailed: !tts.ok || undefined,
+          });
         });
       }
     );

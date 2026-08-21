@@ -326,6 +326,19 @@ export function registerSttHandlers(
   let consecutiveErrors = 0;
   // 通話終了時の拾い上げ（flushPendingFinal）中だけ、確定テキストをここへも回収する
   let flushCollector: ((transcript: string) => void) | null = null;
+  /**
+   * 確定を「届いた順」に送り出すための待ち行列（v1.49.0・2026-08-21）。
+   *
+   * ★確定の仕上げ（用語集の読み照合・発音照合）には待ち時間があり、その長さは
+   *   文によって変わる。何もしないと**短い文が長い文を追い越して**係員へ届く。
+   *   ひとつの発話が2つに分かれて確定したとき（分割確定）、後半が前半より先に
+   *   出てしまい、会話の順番が入れ替わっていた（2026-08-21 英語S3・S4で実測）。
+   *   ここに並べて、前の1件を送り終えてから次を送る。
+   *
+   *   ※ 破棄の見張り（無音ゲート・自信度など）は待ち行列の**前**で行う。順番に
+   *      意味がある判定（gate.onFinal の分割確定の引き継ぎ）を狂わせないため。
+   */
+  let finalChain: Promise<void> = Promise.resolve();
   // 無音ゲート：発話音量が観測されていない区間の認識結果（モデルの幻聴）を破棄する
   const gate = new SilenceGate();
   // 認識ガードの障害履歴への記録は種類ごとに1分に1件へ間引く。マイク常時ON方式では
@@ -468,19 +481,25 @@ export function registerSttHandlers(
           onInterim?.("");  // 表示済みの途中経過を消す（確定は破棄したため）
           return;
         }
-        // 確定時のみ、同音の別表記を用語集の登録どおりに矯正する。
-        // 日本語は読み照合（kuromoji）、外国語は発音・表記の照合（施策2）。
-        const transcript = glossaryField
-          ? await applyForeignCorrection(base, glossaryField, foreignMap)
-          : await applyReadingMatch(base, readingMap);
-        // ── 診断ログ（用語集語の誤挿入調査＋各ガードのしきい値調整）─────────
-        // 生の認識結果(raw)→かな漢字補正(corrected)→読み照合(final)を段階で記録。
-        // 話していない登録語が混入した場合、それが raw の時点で入っているか（＝モデル側か
-        // 後処理側か）を切り分けるためのログ。confidence は自信度ガードの調整用に常時記録。
-        console.log(`[stt-diag] speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)} conf=${confidence == null ? "-" : confidence.toFixed(3)} 基準=${minConfidence}${cont} raw=${JSON.stringify(raw)} corrected=${JSON.stringify(base)} final=${JSON.stringify(transcript)}`);
-        socket.emit("stt:final", { transcript });
-        flushCollector?.(transcript); // 通話終了時の拾い上げ中なら、サーバー側でも回収する
-        noteSttFinal(socket.id); // 性能測定：発話終了→確定テキスト
+        // ★ここから先は**届いた順**に流す（finalChain の説明を参照）。仕上げの
+        //   待ち時間が文ごとに違うため、並行に処理すると分割確定の後半が前半を
+        //   追い越して届く。見張り（上のガード）はすべてこの行より前で済ませてある。
+        finalChain = finalChain.then(async () => {
+          // 確定時のみ、同音の別表記を用語集の登録どおりに矯正する。
+          // 日本語は読み照合（kuromoji）、外国語は発音・表記の照合（施策2）。
+          const transcript = glossaryField
+            ? await applyForeignCorrection(base, glossaryField, foreignMap)
+            : await applyReadingMatch(base, readingMap);
+          // ── 診断ログ（用語集語の誤挿入調査＋各ガードのしきい値調整）─────────
+          // 生の認識結果(raw)→かな漢字補正(corrected)→読み照合(final)を段階で記録。
+          // 話していない登録語が混入した場合、それが raw の時点で入っているか（＝モデル側か
+          // 後処理側か）を切り分けるためのログ。confidence は自信度ガードの調整用に常時記録。
+          console.log(`[stt-diag] speech=${verdict.speechChunks} maxRms=${Math.round(verdict.maxRms)} conf=${confidence == null ? "-" : confidence.toFixed(3)} 基準=${minConfidence}${cont} raw=${JSON.stringify(raw)} corrected=${JSON.stringify(base)} final=${JSON.stringify(transcript)}`);
+          socket.emit("stt:final", { transcript });
+          flushCollector?.(transcript); // 通話終了時の拾い上げ中なら、サーバー側でも回収する
+          noteSttFinal(socket.id); // 性能測定：発話終了→確定テキスト
+        }).catch((e) => { console.error("[stt] 確定の仕上げでエラー:", e); });
+        await finalChain;
       } else {
         // interim（入力中プレビュー）も同じ基準で抑止し、幻聴の「打ちかけ表示」を防ぐ
         if (!gate.hasSpeech()) return;
@@ -581,8 +600,9 @@ export function registerSttHandlers(
       const settle = () => {
         clearTimeout(timer);
         // "end" はデータ配送の後に来るが、確定の処理（読み照合の await）が
-        // まだ走っていることがあるので、少しだけ待ってから締める。
-        setTimeout(resolve, 200);
+        // まだ走っていることがあるので、待ち行列が空になるのを待ってから締める
+        // （行列に並べる前の分もあるので、さらに少しだけ置く）。
+        setTimeout(() => { void finalChain.then(() => resolve()); }, 200);
       };
       s.on("end", settle);
       s.on("error", settle);
