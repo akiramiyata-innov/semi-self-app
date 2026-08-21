@@ -26,17 +26,47 @@ try {
 
   const micLogs = () => page.console.filter((l) => l.text.startsWith("[mic]")).map((l) => l.text);
 
-  // ① 3分割の返答（S5の形）
+  // ① 3分割の返答（S5の形）。#1と#2はほぼ同時、#3は約4秒後
+  const micButtonText = () => page.js(`[...document.querySelectorAll('button')].map(b=>b.textContent).find(t=>/Mic (ON|OFF|paused)/.test(t)) ?? ''`);
+  // お知らせは2行で出る（改行入り）ので、空白をならしてから探す
+  const alertShown = () => page.js(`document.body.innerText.replace(/\\s+/g," ").includes("The mic is paused while the staff member is speaking")`);
   staff.socket.emit("speech:staff", { sessionId: sid, text: "今いらっしゃる南北線のホームから", isFinal: true });
   await sleep(100);
   staff.socket.emit("speech:staff", { sessionId: sid, text: "地下1階まで上がってください。地上", isFinal: true });
-  await sleep(4000);
+  // 読み上げ中はマイクボタンが「一時停止中」になり、ONから切り替わった瞬間に画面中央の
+  // お知らせが出る（v1.53.0）。★お知らせは3.5秒で消えるので、#1を送った直後に観測する
+  let pausedSeen = "", alertSeen = false;
+  for (let i = 0; i < 10 && !(pausedSeen && alertSeen); i++) {
+    await sleep(250);
+    if (!pausedSeen) { const t = await micButtonText(); if (t.includes("Mic paused")) pausedSeen = t; }
+    if (!alertSeen) alertSeen = await alertShown();
+  }
+  c.check("読み上げ中はマイクボタンが「Mic paused」になる（補足文は無し）", pausedSeen.includes("Mic paused") && !pausedSeen.includes("resumes"), pausedSeen);
+  c.check("ONから一時停止に切り替わった瞬間、画面中央にお知らせが出る", alertSeen, "");
+  if (alertSeen) {
+    // お知らせが出ている画面を記録に残す（任意）
+    try {
+      const fsm = await import("node:fs"); const pathm = await import("node:path");
+      const here = pathm.dirname(new URL(import.meta.url).pathname);
+      fsm.mkdirSync(pathm.join(here, "out"), { recursive: true });
+      await page.screenshot(pathm.join(here, "out", "t5-paused.png"));
+      console.log("   お知らせが出ている画面を保存: scripts/regression/out/t5-paused.png");
+    } catch { /* 画面保存は任意 */ }
+  }
+  await sleep(1400); // #3 は #1 の約4秒後（S5の形）
   staff.socket.emit("speech:staff", { sessionId: sid, text: "への案内に沿って進んでいただきますと2番出口に出られます", isFinal: true });
+  let alertGone = false;
+  for (let i = 0; i < 20 && !alertGone; i++) { await sleep(400); alertGone = !(await alertShown()); }
+  c.check("お知らせは数秒で自動で消える", alertGone, "");
   // 全部鳴り終わるまで待つ（3つで最長20秒程度）
   let logs = [];
   for (let i = 0; i < 60; i++) { await sleep(500); logs = micLogs(); if (logs.length >= 2 && logs.at(-1).includes("再開")) break; }
   const pauses = logs.filter((l) => l.includes("一時停止")).length, resumes = logs.filter((l) => l.includes("再開")).length;
   c.check("3分割でも一時停止→再開が1組だけ（途中で戻らず、最後に戻る）", pauses === 1 && resumes === 1, JSON.stringify(logs));
+  await sleep(800);
+  const afterText = await micButtonText();
+  c.check("再開後はマイクボタンが「Mic ON」に戻る", afterText.includes("Mic ON"), afterText);
+  c.check("自動で再開したときはお知らせが出ない", !(await alertShown()), "");
   c.check("再生失敗の見張りは発動していない", !page.console.some((l) => l.text.includes("時間切れ")), "");
 
   // ② 音声の変換を永遠に終わらせない → 15秒で自動復帰
